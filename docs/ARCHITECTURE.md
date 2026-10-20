@@ -289,6 +289,30 @@ public protocol PlaybackEngine: AnyObject, Sendable {
 - 所有 `events` 在 `@MainActor` 消费，引擎内部不得直接触碰 UI。
 - `stop()` 后引擎必须回到 `idle` 且释放解码器。
 
+### 3.1 引擎实现：AetherEngine 映射（`AetherEngineAdapter`）
+
+v1.0 的实现类是 `AetherEngineAdapter`，内部持有 AetherEngine 的 `player`。
+**铁律：`import AetherEngine` 只允许出现在 `Sources/PrismPlayback/Engine/AetherEngineAdapter.swift` 一个文件里**
+（CI 用 `grep -rl "import AetherEngine" --include=*.swift | grep -v AetherEngineAdapter` 检查）。
+
+| 我们的协议 | AetherEngine | 适配要点 |
+|---|---|---|
+| `load(_:)` | `try await player.load(url:startPosition:options:)` | `PlaybackRequest.headers` → `options.httpHeaders`（Emby 鉴权头） |
+| `play()` / `pause()` | `player.play()` / `player.pause()` | 直接映射 |
+| `seek(to:)` | `await player.seek(to: seconds)` | `Ticks` → `Double` 秒 |
+| `setRate(_:)` | `player.setRate(_:)` | 上限受 `player.maxSupportedRate` 约束（视频 2x） |
+| `setVolume(_:)` | **AetherEngine 无音量 API** | 用 `AVAudioEngine`/系统音量或加一层 `MPVolumeView` 等价物 → 标【待验证】 |
+| `selectAudioTrack(_:)` | `player.selectAudioTrack(index:)` | 直接用 `MediaStream.index` |
+| `selectSubtitleTrack(_:)` | `player.selectSubtitleTrack(index:)` / `clearSubtitle()` | `nil` → `clearSubtitle()` |
+| `events` | `player.$state` / `$errorInfo` 是 **Combine `@Published`** | **需要桥接**：`AsyncStream` + `publisher.values`，或用 `for await` |
+| `renderView` | `AetherPlayerSurface(engine:)`（SwiftUI）或 `AetherPlayerView`（AppKit） | SwiftUI 直接嵌入，**不需要 `NSViewRepresentable`** |
+| 音轨/字幕列表 | `player.subtitleTracks`（`[TrackInfo]`）等 | 映射为我们的 `TrackInfo` |
+| 字幕延迟 | `player.subtitleCues` 提供 cue 与位置 | 延迟设置需查实际 API → 标【待验证】 |
+| PiP / AirPlay / Now Playing | **引擎原生支持** | 不再需要 T3.5 的自研工作，改为「接线 + 元数据注入」 |
+
+**待验证项**（M3 集成时确认）：音量控制方式、字幕延迟 API、`maxSupportedRate` 的实际约束、
+`$state` 的 Combine 桥接在 Swift 6 严格并发下的 `Sendable` 处理。
+
 ---
 
 ## 4. PrismData

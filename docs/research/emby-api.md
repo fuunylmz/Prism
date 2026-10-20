@@ -19,12 +19,31 @@
 | ⚠️ | **待验证**：仅推断或资料冲突 | 必须先实测再依赖，文中给出验证方法 |
 
 **权威来源优先级**（本文据此判定）：
-1. Emby 官方 OpenAPI 规范（机器可读，最准确）：<https://swagger.emby.media/openapi.json>
-2. Emby 官方 REST 文档：<https://dev.emby.media/doc/restapi/index.html>
-3. Emby 官方 Reference（每端点一页）：<https://dev.emby.media/reference/RestAPI.html>
-4. Jellyfin OpenAPI（仅用于**交叉验证**，不可当作 Emby 文档）：<https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json>
 
-> ⚠️ **重要前提**：Jellyfin 与 Emby 同源（Jellyfin 是 Emby 3.5.2 的 fork），大量端点一致，但**并不完全一致**。凡是从 Jellyfin 侧确认、Emby 侧未确认的，本文一律标注 `Jellyfin 侧确认，Emby 待验证`。
+| 级别 | 来源 | 说明 |
+|---|---|---|
+| 1 | **Emby Reference 页**（每端点一页，由当前版本代码生成）：<https://dev.emby.media/reference/RestAPI.html> | **字段/参数冲突时的最终依据** |
+| 2 | Emby REST 文档（人写的指南）：<https://dev.emby.media/doc/restapi/index.html> | 讲流程与语义，但部分页面陈旧 |
+| 3 | Emby OpenAPI 规范：<https://swagger.emby.media/openapi.json> | ⚠️ **是 4.1.1.0 的旧快照**，见下 |
+| 4 | Jellyfin OpenAPI：<https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json> | **仅用于交叉验证**，不可当作 Emby 文档 |
+
+> ### 🚨 关键前提：`swagger.emby.media/openapi.json` 是一份旧快照
+>
+> 该文件的 `info.version` 是 **`4.1.1.0`**（不是 4.8/4.9）。实测比对发现它**落后于当前 Reference 页**：
+>
+> | schema | OpenAPI（4.1.1.0） | Reference 页（当前） | 差异 |
+> |---|---|---|---|
+> | `PlaybackStartInfo` | 21 字段 | **30 字段** | 缺 `EventName`、`SleepTimerMode`、`SleepTimerEndTime`、`Shuffle`、`PlaylistIndex`、`PlaylistLength`、`PlaylistItemIds`、`SubtitleOffset`、`PlaybackRate` |
+> | `PlaybackInfoRequest` | 18 字段 | **19 字段** | 缺 `CurrentPlaySessionId`、`AllowInterlacedVideoStreamCopy`；多 `DirectPlayProtocols` |
+> | `PlaybackStopInfo` | 11 字段 | **14 字段** | 缺 `IsAutomated` 等 |
+>
+> - 证据：<https://swagger.emby.media/openapi.json> → `info.version = "4.1.1.0"`
+> - **本文所有字段表都以 Reference 页为准**，OpenAPI 只用来核对拼写与类型、以及确认"某个端点是否存在"。
+> - **开发代理注意**：不要用 OpenAPI 生成的代码去反序列化 Emby 4.8/4.9 的请求体，会丢字段。
+
+> ⚠️ **重要前提**：Jellyfin 与 Emby 同源 —— Jellyfin 源自 Emby 的 **3.5.2** 版本（2018 年 12 月 fork，之后 Emby 4.x 转为闭源）。因此两者大量端点一致，但**并不完全一致**（Emby 3.5.2 → 4.8/4.9 又演进了 5 年）。
+> - ✅ 同源来源：<https://jellyfin.org/docs/general/about>（"Jellyfin is descended from Emby's 3.5.2 release and ported to the .NET Core framework"）
+> - 凡是从 Jellyfin 侧确认、Emby 侧未确认的，本文一律标注 `Jellyfin 侧确认，Emby 待验证`。
 
 ---
 
@@ -841,22 +860,29 @@ X-Emby-Token: <token>
 | `AllowAudioStreamCopy` | bool | 转码时允许音频流拷贝 |
 | `IsPlayback` | bool | 是否真实播放（`true` 时服务器会计入会话） |
 | `AutoOpenLiveStream` | bool | 自动打开直播流 |
-| `DirectPlayProtocols` | string[] | 允许的直连协议 |
+| `CurrentPlaySessionId` | string | 当前播放会话 Id（换流/纠错时传上一次的）〔仅 Reference 页有〕 |
+| `AllowInterlacedVideoStreamCopy` | bool | 允许隔行视频流拷贝〔仅 Reference 页有〕 |
+| `DirectPlayProtocols` | string[] | 允许的直连协议〔仅 OpenAPI 有〕 |
 
-- ✅ 来源（字段全集）：<https://swagger.emby.media/openapi.json> → `MediaInfo.PlaybackInfoRequest`
-- ✅ 页面：<https://dev.emby.media/reference/RestAPI/MediaInfoService/postItemsByIdPlaybackinfo.html>
+- ✅ 来源（**Reference 页 19 个字段**，以此为准）：<https://dev.emby.media/reference/RestAPI/MediaInfoService/postItemsByIdPlaybackinfo.html>
+- ⚠️ 来源（OpenAPI 18 个字段，缺 `CurrentPlaySessionId`、`AllowInterlacedVideoStreamCopy`，多 `DirectPlayProtocols`）：<https://swagger.emby.media/openapi.json> → `MediaInfo.PlaybackInfoRequest`
+- 两份清单**取并集**最安全（多传未知字段服务器会忽略；缺字段则功能失效）。
 
 **⚠️ Emby vs Jellyfin 的签名差异（必须同时兼容）**：
 
-| | Emby | Jellyfin 10.9 |
+| | Emby（OpenAPI 实测） | Jellyfin（当前 stable spec 12.2.0） |
 |---|---|---|
-| `POST /Items/{id}/PlaybackInfo` | **参数在 JSON body** | **参数在 query string**，无 body |
+| `POST /Items/{id}/PlaybackInfo` | **只有 `body`**，**无任何 query 参数** | **同时有** 15 个 query 参数 **和** `PlaybackInfoDto` body |
 | `GET /Items/{id}/PlaybackInfo` | `?UserId=` 必填 | `?userId=` 可选 |
 
-- Jellyfin 侧证据：<https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json> → `/Items/{itemId}/PlaybackInfo` → `post`（`userId`、`maxStreamingBitrate`… 全是 query 参数，`requestBody` 为空）
-- Emby 侧证据：<https://swagger.emby.media/openapi.json> → `/Items/{Id}/PlaybackInfo` → `post`（只有一个 `body` 参数，无 query 参数）
+- ✅ Emby 侧证据（逐字段核对）：<https://swagger.emby.media/openapi.json> → `/Items/{Id}/PlaybackInfo` → `post` 的 `parameters` 只有 `Id`(path) 和 `body` 两项，**没有** query 参数。
+- ✅ Jellyfin 侧证据（逐字段核对）：<https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json> → `/Items/{itemId}/PlaybackInfo` → `post` 有 15 个 query 参数（`userId`、`maxStreamingBitrate`、`startTimeTicks`、`audioStreamIndex`、`subtitleStreamIndex`、`maxAudioChannels`、`mediaSourceId`、`liveStreamId`、`autoOpenLiveStream`、`enableDirectPlay`、`enableDirectStream`、`enableTranscoding`、`allowVideoStreamCopy`、`allowAudioStreamCopy`），**并且**有 `requestBody` → `PlaybackInfoDto`。
+- ⚠️ **Jellyfin 10.9 的确切形态未验证**：上面引用的是**当前** stable spec（12.2.0），比 10.9 新。10.9 时代普遍认为 POST 走 query、无 body；但 Jellyfin 后续版本加了 `PlaybackInfoDto` body。**Prism 目标是兼容两者，所以不要依赖「某一版 Jellyfin 用哪种」**。
 
-**兼容做法**：**query 和 body 同时发**（服务器会忽略不认识的）。这是 ◐ 社区通行做法，非官方承诺 —— 【待验证】建议在真机上分别验证 Emby 与 Jellyfin 各一次。
+**兼容做法**：**query 和 body 同时发**。
+- 对 Emby：多余 query 参数被忽略（Emby 只读 body）。
+- 对 Jellyfin：body 与 query 内容一致，取哪边都对。
+- ◐ 该策略为工程推断（HTTP 服务器忽略未声明 query 参数是常规行为），**官方未承诺** ——【待验证】。建议在真机上对 Emby 4.8、Emby 4.9、Jellyfin 10.9 各验证一次。
 
 ```swift
 func playbackInfo(itemId: String, userId: String, profile: DeviceProfile) async throws -> PlaybackInfoResponse {
@@ -1353,28 +1379,37 @@ VideoRotationNotSupported
 | `PlaylistIndex` | int | 播放队列当前位置 |
 | `PlaylistLength` | int | 队列总长 |
 | `PlaylistItemId` | string | 队列项 Id |
+| `PlaylistItemIds` | string[] | 队列全部项 Id |
 | `NowPlayingQueue` | QueueItem[] | 队列内容 |
 | `RunTimeTicks` | int64 | 时长 |
-| `PlaybackStartTimeTicks` | int64 | |
+| `PlaybackStartTimeTicks` | int64 | 起播时刻 |
 | `SessionId` | string | 会话 Id |
 | `LiveStreamId` | string | 直播流 Id |
 | `Brightness` / `AspectRatio` | int / string | 画面调整 |
+| `EventName` | enum | 见下方 `ProgressEvent` |
+| `SleepTimerMode` | enum | `None` / `AfterItem` / `AtTime` |
+| `SleepTimerEndTime` | datetime | 睡眠定时结束时间 |
+| `Shuffle` | bool | 是否随机播放 |
 
-- ✅ 来源：<https://swagger.emby.media/openapi.json> → `PlaybackStartInfo`
-- ✅ 页面：<https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlaying.html>
+- ✅ 来源（**Reference 页共 30 个字段**，以此为准）：<https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlaying.html>
+- ⚠️ 来源（OpenAPI 快照只有 21 个，缺 `EventName`、`SleepTimerMode`、`SleepTimerEndTime`、`Shuffle`、`PlaylistIndex`、`PlaylistLength`、`PlaylistItemIds`、`SubtitleOffset`、`PlaybackRate`）：<https://swagger.emby.media/openapi.json> → `PlaybackStartInfo`
 
-**⚠️ 文档与 schema 的差异**：官方 Playback-Check-ins 文档列出的字段里有 `QueueableMediaTypes`（数组，"Audio"/"Video"），但 **OpenAPI 的 `PlaybackStartInfo` 里没有这个字段**。文档较旧。
-- 文档侧：<https://dev.emby.media/doc/restapi/Playback-Check-ins.html>（原文含 `QueueableMediaTypes (Array[string] - Audio,Video)`）
-- schema 侧：<https://swagger.emby.media/openapi.json> → `PlaybackStartInfo` 无 `QueueableMediaTypes`
-- **处理**：**不要发** `QueueableMediaTypes`（schema 里没有，发了可能被 400 拒）。◐ 若发现服务器需要它，再加。
+> **⚠️ 为什么两份清单不一样**：`swagger.emby.media/openapi.json` 的 `info.version` 是 **`4.1.1.0`**，是一份**旧快照**；而 dev.emby.media 的 Reference 页由当前版本代码生成。**冲突时以 Reference 页为准**，OpenAPI 仅用来核对字段名拼写与类型。
+> - 证据：<https://swagger.emby.media/openapi.json> → `info.version = "4.1.1.0"`
+> - 建议：实现时**按 Reference 页的 30 字段发**，多出来的字段对旧服务器无害。
+
+**⚠️ `QueueableMediaTypes` 不要发**：官方 Playback-Check-ins 文档列了它（`Array[string] - Audio,Video`），但 **Reference 页与 OpenAPI 的 `PlaybackStartInfo` 里都没有**。
+- 文档侧：<https://dev.emby.media/doc/restapi/Playback-Check-ins.html>
+- schema 侧：<https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlaying.html>
+- **处理**：不发。该字段在 3.x 时代存在，4.x 已移除。
 
 #### `PlaybackProgressInfo`（`/Sessions/Playing/Progress`）✅
 
-字段与 `PlaybackStartInfo` **完全相同**，**外加**：
+**字段与 `PlaybackStartInfo` 完全相同**（Reference 页两者都是 30 个字段，逐项比对无差异）。`EventName` 在两者中都有，但在 Progress 里才是必填语义。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `EventName` | enum | 上报原因（见下） |
+| `EventName` | enum | 上报原因（见下），Progress 场景必填 |
 
 **`EventName`（`ProgressEvent`）取值** ✅：
 
@@ -1400,20 +1435,23 @@ ShuffleChange, SleepTimerChange
 | `PlaySessionId` | string | 会话 Id |
 | `PositionTicks` | int64 | **停止位置（写进度就靠它）** |
 | `Failed` | bool | 是否因失败而停止 |
+| `IsAutomated` | bool | 是否由系统自动触发（非用户操作） |
 | `NextMediaType` | string | 下一个媒体类型 |
 | `LiveStreamId` | string | |
 | `PlaylistIndex` / `PlaylistLength` / `PlaylistItemId` / `NowPlayingQueue` | | 队列信息 |
 | `SessionId` | string | |
 | `Item` | BaseItemDto | 库外内容 |
 
-- ✅ 来源：<https://swagger.emby.media/openapi.json> → `PlaybackStopInfo`
-- ✅ 页面：<https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlayingStopped.html>
+- ✅ 来源（**Reference 页共 14 个字段**）：<https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlayingStopped.html>
+- ✅ 交叉核对（OpenAPI 快照的 11 个字段是其子集）：<https://swagger.emby.media/openapi.json> → `PlaybackStopInfo`
 
-**⚠️ 重要差异（已核实）**：`PlaybackStopInfo` **没有** `PlayMethod`、`IsPaused`、`RepeatMode`、`CanSeek`、`VolumeLevel`、`AudioStreamIndex`、`SubtitleStreamIndex` 这些字段（schema 层面）。
-但官方文档说 "The contents of the request are identical to the playback start message"。
+**⚠️ 重要差异（已核实，三份来源逐一比对）**：`PlaybackStopInfo` **确实没有** `PlayMethod`、`IsPaused`、`RepeatMode`、`CanSeek`、`VolumeLevel`、`AudioStreamIndex`、`SubtitleStreamIndex`、`RunTimeTicks`、`EventName` 等字段 —— Reference 页与 OpenAPI 一致。
+但官方 Playback-Check-ins 文档说 "The contents of the request are identical to the playback start message"。
 - 文档侧：<https://dev.emby.media/doc/restapi/Playback-Check-ins.html>
-- schema 侧：<https://swagger.emby.media/openapi.json>（三个 schema 的字段差异已逐一比对）
-- **处理建议**：**发完整字段**（把 Start 的所有字段都带上）。服务器按 schema 反序列化会忽略多余字段（.NET `System.Text.Json` 默认行为）—— ◐ 这是合理推断，**未在 Emby 官方文档确认**，【待验证】。若遇到 400，再裁剪到 schema 字段。
+- Reference 侧：<https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlayingStopped.html>（14 字段）
+- **处理建议**：**按 Reference 的 14 字段发**（`ItemId`、`MediaSourceId`、`PlaySessionId`、`PositionTicks`、`Failed`、`IsAutomated`、`NextMediaType`、`LiveStreamId`、`PlaylistIndex`、`PlaylistLength`、`PlaylistItemId`、`NowPlayingQueue`、`SessionId`、`Item`）。
+  这 14 个字段已足够服务器写进度（关键是 `ItemId` + `MediaSourceId` + `PlaySessionId` + `PositionTicks`）。
+- ⚠️【待验证】：若服务器依赖 `PlayMethod` 来区分"看完"判定，可尝试额外附带；.NET 反序列化默认忽略未知字段，但**未在 Emby 文档确认**。先按 14 字段实现。
 
 ### 7.3 上报节奏 ✅
 
@@ -2311,7 +2349,7 @@ f2.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
 | 16 | `QueryResult` 含 `Items` + `TotalRecordCount` | <https://dev.emby.media/reference/RestAPI/ItemsService/getUsersByUseridItems.html> |
 | 17 | `BaseItemDto` / `UserItemDataDto` / `BaseItemPerson` / `ChapterInfo` 字段 | <https://swagger.emby.media/openapi.json> |
 | 18 | 条目字段语义（`IndexNumber`、`ParentIndexNumber`、`SeriesId`、`ImageTags`、`BackdropImageTags`、`UserData`…） | <https://dev.emby.media/doc/restapi/Item-Information.html> |
-| 19 | `POST /Items/{Id}/PlaybackInfo` 请求体 `PlaybackInfoRequest` 字段全集 | <https://swagger.emby.media/openapi.json>；<https://dev.emby.media/reference/RestAPI/MediaInfoService/postItemsByIdPlaybackinfo.html> |
+| 19 | `POST /Items/{Id}/PlaybackInfo` 请求体 `PlaybackInfoRequest` 字段全集；**Emby 侧只接受 body，无 query 参数** | <https://swagger.emby.media/openapi.json>；<https://dev.emby.media/reference/RestAPI/MediaInfoService/postItemsByIdPlaybackinfo.html> |
 | 20 | `DeviceProfile` 及其子结构（`DirectPlayProfile`/`TranscodingProfile`/`CodecProfile`/`ProfileCondition`/`SubtitleProfile`/`ResponseProfile`）字段与枚举 | <https://dev.emby.media/reference/pluginapi/MediaBrowser.Model.Dlna.DeviceProfile.html>；<https://swagger.emby.media/openapi.json> |
 | 21 | DeviceProfile 的 DLNA 专属属性可省略 | <https://dev.emby.media/doc/restapi/Sync.html> |
 | 22 | `PlaybackInfoResponse{MediaSources, PlaySessionId, ErrorCode}` | <https://swagger.emby.media/openapi.json> |
@@ -2372,8 +2410,8 @@ f2.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
 
 | # | 待验证项 | 风险 | 验证方法 |
 |---|---|---|---|
-| 1 | `POST /Items/{id}/PlaybackInfo` 在 Emby 上是否也接受 **query 参数**（而不只是 body） | 高：写错会导致 400 或参数被忽略 | 分别用「只 body」「只 query」「两者都发」请求 Emby 与 Jellyfin，对比返回的 MediaSources 是否按 DeviceProfile 变化 |
-| 2 | `DirectStreamUrl` 在 Emby 4.9.x 是否仍返回 | 中：不返回则需自行拼 URL | 对同一 item 打 PlaybackInfo，`jq '.MediaSources[0].DirectStreamUrl'` |
+| 1 | `POST /Items/{id}/PlaybackInfo` 在 Emby 上是否也接受 **query 参数**（Emby OpenAPI 只声明 body；Jellyfin 声明了 query+body） | 高：若 Emby 严格校验未知 query 会 400 | 分别用「只 body」「只 query」「两者都发」请求 Emby 4.8 / 4.9 / Jellyfin 10.9，对比返回的 MediaSources 是否按 DeviceProfile 变化 |
+| 2 | `DirectStreamUrl` 在 **Emby 4.9.x** 是否仍返回（4.8 及更早已确认有，schema 里也在） | 中：不返回则需自行拼 URL | 对同一 item 打 PlaybackInfo，`jq '.MediaSources[0].DirectStreamUrl'`；分别在 4.8 与 4.9 服务器上各跑一次 |
 | 3 | `PlaybackStopInfo` 是否接受 `PlayMethod` 等 schema 外字段 | 中：若 400 则要裁剪 | 发完整字段，看返回码；再用 `Failed=true` 场景测 |
 | 4 | `Latest` 端点是否支持 `StartIndex` | 中：影响"加载更多" | 传 `StartIndex=20&Limit=20`，比较返回的第一条是否变化 |
 | 5 | Emby 的 `PlaybackStart`/`PlaybackStopped` WebSocket 消息是否还存在 | 中：影响"停止即刷新" | 连 WS 订阅 `SessionsStart`，另一设备播放/停止，记录全部 MessageType |

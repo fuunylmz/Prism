@@ -1,9 +1,19 @@
 # Prism
 
-原生 macOS 的 Emby 客户端：SwiftUI 界面 + libmpv 播放内核 + 本地缓存与离线能力。
+原生 macOS 的 Emby 客户端：SwiftUI 界面 + AetherEngine 播放内核 + 本地缓存与离线能力。
 
 > 本仓库当前处于 **M0 地基阶段**：骨架已可构建、可运行、可测试，业务功能由各模块 owner 并行填充。
 > 规划与任务板见 [docs/ROADMAP.md](docs/ROADMAP.md)，模块契约见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+## 特性规划（v1.0）
+
+- **连接**：手动填服务器地址、局域网 UDP 7359 自动发现、登录与凭据安全存储
+- **浏览**：首页（继续观看 / 最新 / 接下来）、媒体库网格、筛选排序、搜索
+- **详情**：电影与剧集两种布局、季集列表、演职员、相似推荐
+- **播放**：mkv/mp4 直连，H.264/HEVC/AV1 硬解，ASS/PGS 字幕，多音轨，HDR / 杜比视界
+- **续播**：播放进度上报服务器，跨设备一致
+
+v1.0 明确不做：音乐库、Live TV、远程控制、多用户。详见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
 ---
 
@@ -60,7 +70,7 @@ Sources/
   PrismCore/             # 基础模型、日志、设置存储、工具（无依赖）
   EmbyAPI/               # Emby 网络层与 DTO            → 依赖 PrismCore
   PrismData/             # 本地缓存 / Keychain / 图片缓存 → 依赖 PrismCore, EmbyAPI
-  PrismPlayback/         # 播放引擎（后续接 MPVKit）     → 依赖 PrismCore
+  PrismPlayback/         # 播放引擎（AetherEngine 封装）  → 依赖 PrismCore
   PrismUI/               # 设计系统与界面               → 依赖以上全部
 Tests/
   PrismCoreTests/
@@ -122,4 +132,22 @@ PrismUI ──▶ PrismData ──▶ EmbyAPI ──▶ PrismCore
 
 ## 许可
 
-TBD（播放内核使用 LGPL 版 MPVKit，分发方式见 ROADMAP）。
+**Prism 以 [GNU GPL v3.0](LICENSE) 发布**（`GPL-3.0-only`）。
+
+这意味着：你可以自由使用、修改、分发本软件，但**衍生作品必须以同样的许可证开源**。
+
+### 第三方组件
+
+| 组件 | 许可证 | 用途 |
+|---|---|---|
+| [AetherEngine](https://github.com/superuser404notfound/AetherEngine) | LGPL-3.0 **+ App Store/DRM 例外** | 播放内核（FFmpeg demux + VideoToolbox 解码） |
+| [FFmpegBuild](https://github.com/superuser404notfound/FFmpegBuild) | LGPL-3.0 | FFmpeg 二进制发行 |
+| [LibDovi](https://github.com/superuser404notfound/LibDovi) | LGPL-3.0 | 杜比视界 RPU 处理 |
+| [GRDB.swift](https://github.com/groue/GRDB.swift) | MIT | 本地数据库（计划） |
+| [Nuke](https://github.com/kean/Nuke) | MIT | 图片加载与缓存（计划） |
+
+完整声明与各自许可证全文链接见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+
+> **为什么用 GPL-3.0 而不是 MIT？** Prism 依赖 AetherEngine（LGPL-3.0）。虽然 LGPL 允许宽松许可证
+> 的项目链接它，但选择 GPL-3.0 可以让整个生态保持一致，并确保任何改进都会回馈社区。
+> 本项目是 Emby 的第三方客户端，与 Emby LLC 无关联。

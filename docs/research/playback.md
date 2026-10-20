@@ -1,6 +1,6 @@
 # Prism 播放引擎技术选型与落地方案
 
-> 文档版本：2026-10-21 ｜ 作者：播放引擎架构师（代理）
+> 文档版本：2026-10-21（rev.3，**引擎首选已变更**）｜ 作者：播放引擎架构师（代理）
 > 适用代码基线：SwiftUI 原生 macOS，Xcode 27.1 / Swift 6.4 / 部署目标 macOS 15+
 > 本文所有技术断言都带置信度标记，见 §9「来源与置信度」。**请先读 §0.3 再读其它章节。**
 
@@ -10,23 +10,32 @@
 
 ### 0.1 一句话结论
 
-**采用双引擎：AVPlayer 负责 MP4 / HLS / 直封，libmpv（MPVKit）负责 MKV / 复杂字幕 / AVPlayer 无法解码的音频。** 该结论经过实测复核，**未被推翻**，但推翻条件明确写在 §4.3。
+**首选 AetherEngine 单引擎；MPVKit（libmpv）降为 Plan B。**
 
-### 0.2 五条最重要的判断
+AetherEngine 内部已经实现了「FFmpeg demux + 重封装成 HLS-fMP4 交给 AVPlayer / 或 libavcodec 软解」的双路径，**它把我们要做的双引擎封装在了一个 Swift 包内部**。这样我们既拿到格式广度，又保住 macOS 原生能力（AirPlay / PiP / Dolby Vision / Atmos / Now Playing），还避免了 `OpaquePointer` 隔离层和 LGPL 静态链接问题。
+
+> **变更说明（rev.2 → rev.3）**：rev.2 的结论是「AVPlayer + libmpv 双引擎」。变更原因有两个，均为主管侧决策输入：① **用户已决定开源 Prism**，LGPL 静态链接的分发义务不再构成障碍；② 核实了 AetherEngine 的实际情况（见 §2.2），它在**几乎每个维度**都优于或等于 MPVKit，且没有 mpv 的 UX 硬伤。
+>
+> 本文保留 MPVKit 的完整核查记录（§2.3、§11），因为它是 Plan B，且部分事实（AVFoundation 边界、HLS 规范、Emby 参数）与引擎选型无关，仍然有效。
+
+### 0.2 六条最重要的判断
 
 | # | 判断 | 依据强度 |
 |---|---|---|
 | 1 | AVFoundation **完全不认 MKV**，且**不认 DTS/TrueHD**，这不是配置问题而是能力边界 | 本机实测 + Apple 官方格式列表 |
 | 2 | HLS 路线救不了 DTS/TrueHD，也救不了 ASS/PGS（HLS 字幕只允许 WebVTT/IMSC1） | Apple HLS Authoring Spec 原文 |
-| 3 | MPVKit 的 LGPL 分支**确实包含 libass**，ASS/PGS 渲染能力完整；但它产出的是**静态库**，这让 LGPL-3.0 的闭源分发只剩「附目标文件」一条路 | 实测 `file`/`otool` + `Package.swift` 原文 |
-| 4 | libmpv 的 Swift 6 严格并发**不是问题**——因为 MPVKit 的 Swift 表面为零，全部是 C；我们的 wrapper 用「单串行队列 + `nonisolated(unsafe)`」即可零诊断通过 | 本机实测编译（§7.3） |
-| 5 | mpv 路径**拿不到 AirPlay、PiP、系统 HDR/DV 握手**。这是双引擎方案必须接受的 UX 不对称 | Apple 文档 + mpv 架构事实 |
+| 3 | **AetherEngine 用「FFmpeg demux → HLS-fMP4 → AVPlayer」解决了 MKV 与 DTS 问题**，同时保留系统 DV/Atmos/Match Content | 官方 README + architecture.md 原文 |
+| 4 | **AetherEngine 是纯 Swift 源码包**，无 `OpaquePointer` 隔离层，API 与我们的 `PlaybackEngine` 协议高度同构 | `Package.swift` + README API 段原文 |
+| 5 | AetherEngine 的许可证是 **LGPL-3.0 + App Store/DRM 例外**；Prism 开源后 LGPL 义务天然满足 | LICENSE 原文 |
+| 6 | mpv 路径**拿不到 AirPlay、PiP、系统 HDR/DV 握手**——这是 MPVKit 降为 Plan B 的决定性理由 | Apple 文档 + mpv 架构事实 |
 
 ### 0.3 阅读前必须知道的三件事
 
-1. **本文档的 spike 只验证了「引擎 API 面」，没有验证「窗口渲染」。** 我在本机跑通了 MKV 解封装、HEVC Main10 识别、双音轨切换、外挂 ASS 加载与样式覆盖、seek/speed/volume/buffering 属性、`audio-spdif` 选项接受——全部通过（§7.2 有完整输出）。**但 `vo=gpu-next + MoltenVK` 渲染到 `CAMetalLayer` 这一段没有跑通**（离屏 `vo=image` 未能写出帧，原因未查明，见 §9.3）。渲染路径属于「待验证」，不要把 §7 当成渲染已验证。
-2. **许可证是本文最硬的风险，不是技术问题。** MPVKit 只能产静态库，LGPL-3.0 §4d1（共享库机制）走不通。详见 §3.3 与 §8-R1。本文不提供法律意见，只陈述条款原文与推论。
-3. **本文与 `docs/DECISION-mpv-license.md` 是配套关系**：那份是决策备忘（A/B/C 三方案），本文是技术方案。两者对许可证的口径必须一致，若冲突以决策备忘为准。
+1. **AetherEngine 与 MPVKit 都尚未集成进 Prism 工程，两者状态均为【未集成 · 未实测】。**
+   - AetherEngine：本文所有结论来自**官方 README / Package.swift / docs/api.md / docs/architecture.md 原文**，没有一行是跑出来的。**它有一个明确的集成前提**：要求 macOS 15.0 / Swift 6.4 / Xcode 27.0 / **至少 26.2 SDK**（因 `VTRegisterSupplementalVideoDecoderIfAvailable` 是 iOS/tvOS 26.2 API）。我们的环境是 Xcode 27.1 / Swift 6.4，**满足**，但需实测确认。
+   - MPVKit：§7.2 记录的是**一次性、离线的验证性实验**（手工 `swiftc` 链接 29 个 xcframework）。该实验产物已清理，**任何人无法复现**，证据等级是「参考」而非「基线」。且该实验**没有验证窗口渲染**。
+2. **许可证风险已大幅降低，但未归零。** Prism 开源后，LGPL 的「提供源码/可重链接」义务通过「Prism 自身源码公开」自然满足。但仍有两条要注意：① AetherEngine 的 App Store 例外**只覆盖它自己的代码，不覆盖其依赖**（README 明示）；② 它的 FFmpeg 以**动态框架**形式分发（FFmpegBuild，LGPL-2.1），这条路径本来就合规。详见 §3.3。
+3. **本文与 `docs/DECISION-mpv-license.md` 的关系已变化**：那份备忘是在「闭源 + MPVKit 静态库」前提下写的，**其结论（A/B/C 三方案）在开源 + AetherEngine 之后已基本失效**，仅作历史记录保留。若两者冲突，**以本文为准**。
 
 ---
 
@@ -132,19 +141,21 @@ Emby 的 HLS 输出**默认是 MPEG-TS**，除非客户端在 DeviceProfile 里�
 - 这 5 个 libass 家族的 binaryTarget **LGPL/GPL 共用同一份 asset URL**（指向 `libass-build` 仓库，无 `-GPL` 后缀），所以不存在「GPL 版才有 libass」的陷阱。
 - 各自许可证：libass **ISC**、FreeType **FTL/GPLv2 双许可**、FriBidi **LGPL-2.1+**、HarfBuzz **MIT**、UnicodeBreak **zlib** —— 都比 LGPL-3.0 宽松，不构成额外负担。
 
-#### 2.1.3 包体积（本次实测，非估算）
+#### 2.1.3 包体积（一次性离线测量，产物已清理）
 
-测量方法：从 `1.0.0` release 用 `curl` 逐个下载 29 个 xcframework → 解压 → `lipo -thin arm64` → 逐框架 `stat`。
+测量方法：从 `1.0.0` release 用 `curl` 逐个下载 29 个 xcframework → 解压 → `lipo -thin arm64` → 逐框架 `stat`。**该测量不可复现（产物已清理），数字按「参考值」使用。**
 
-**下载量：**
+**下载量（仅一次性获取时需要；vendoring 后不再需要）：**
 
 | 口径 | 数值 | 说明 |
 |---|---|---|
 | 单个 repo 的非 GPL `*.xcframework.zip` | ~217 MB | 只算 `MPVKit` 仓库自身的 asset |
-| **全部非 GPL binaryTarget（含跨 repo）** | **~350–380 MB** | SwiftPM 实际会去 13 个不同 repo 下载 |
-| release 的 36 个 asset 总量 | 449 MB | **这个数字没有意义**——含 8 个 `*-all.zip` 汇总包，SPM 不下载 |
+| **全部非 GPL binaryTarget（含跨 repo）** | **~350–380 MB** | 会去 13 个不同 repo 下载 |
+| release 的 36 个 asset 总量 | 449 MB | **这个数字没有意义**——含 8 个 `*-all.zip` 汇总包，用不上 |
 
 > ⚠️ 早期估算 217 MB **偏低**，因为漏算了跨 repo 的 13 个 binaryTarget（openssl-build / gnutls-build / libass-build / libbluray-build / moltenvk-build / libshaderc-build / lcms2-build / libplacebo-build / libdovi-build / libdav1d-build / libuavs3d-build / libuchardet-build / libluajit-build）。
+>
+> 📌 **采用 §11 vendoring 后，这个下载成本只发生一次**（由有网络的环境执行并 commit），日常构建与 CI 完全不再下载。
 
 **最终二进制增量（macOS arm64 单架构，未压缩）：**
 
@@ -187,17 +198,17 @@ MPVKit issue #77 / PR #78：用户发现**「LGPL 版」的 FFmpeg 构建带了 
 
 > **教训**：依赖第三方二进制分发时，**必须自己 `strings | grep nonfree` 复核**，不能信 README 的「LGPL」标签。这条已写入 §8-R2。
 
-#### 2.1.6 Swift 6 严格并发——**实测通过**
+#### 2.1.6 Swift 6 严格并发——**文档查不到，仅有一次离线实验观察**
 
-这是本任务里唯一「查不到文档、只能实测」的点。
+这是本任务里唯一「查不到文档、只能靠实验」的点。
 
 - GitHub 搜索 `repo:mpvkit/MPVKit` + `Sendable` / `concurrency`：**total_count = 0**。
 - 搜 `swift 6`：仅 1 条无关 issue。
-- 即：**MPVKit 官方从未声明 Swift 6 并发适配，社区也无已知问题记录。**
+- 即：**MPVKit 官方从未声明 Swift 6 并发适配，社区也无已知问题记录。这是「未查到」，不是「没问题」。**
 
-但我用实测给出了答案（§7.3 有完整命令与输出）：在 `-swift-version 6 -strict-concurrency=complete` 下编译一个符合「单串行队列 + `nonisolated(unsafe)`」模型的 wrapper，**编译零诊断、运行全部功能通过**。
+在 2026-10-21 的一次离线实验中（§7.2，产物已清理、**不可复现**），一个符合「单串行队列 + `nonisolated(unsafe)`」模型的 wrapper 在 `-swift-version 6 -strict-concurrency=complete` 下编译无诊断。**该结果只作参考，需在工程内重验。**
 
-原因很清楚：MPVKit 的 Swift 表面为零（只有 `dummy.c` + C 头文件），Swift 6 的严格并发检查**没有库内 Swift 代码可检查**，只作用于我们的 wrapper。`mpv_handle*` 是 `OpaquePointer`（非 Sendable），必须由我们自己做隔离。
+从原理上推断（**推断，非事实**）：MPVKit 的 Swift 表面为零（`Sources/_MPVKit/` 只有 `dummy.c` + `include/`），Swift 6 的严格并发检查**没有库内 Swift 代码可检查**，只作用于我们的 wrapper。`mpv_handle*` 是 `OpaquePointer`（非 Sendable），必须由我们自己做隔离。这也是 §5.1「零泄漏」约束的技术根因。
 
 ### 2.2 VLCKit（`code.videolan.org/videolan/VLCKit`）
 
@@ -228,29 +239,88 @@ MPVKit issue #77 / PR #78：用户发现**「LGPL 版」的 FFmpeg 构建带了 
 - 对我们：**不适用**。要么 GPL 传染，要么付费，且它自带 UI 与我们的 SwiftUI 设计冲突。
 - 结论：**排除**，但记入对比矩阵作为「同类方案参考」。
 
-### 2.4 AetherEngine（`github.com/superuser404notfound/AetherEngine`）
+### 2.4 AetherEngine（`github.com/superuser404notfound/AetherEngine`）—— **首选**
 
-这是 MPVKit 作者在 README 里推荐的替代品，值得认真评估。
+> 本节事实来自：官方 README、`Package.swift`、`docs/api.md`、`docs/architecture.md`、`LICENSE`、GitHub API。**全部为文档层核实，未集成、未实测。**
 
-| 项 | 值 |
+#### 2.4.1 事实清单
+
+| 项 | 值 | 来源 |
+|---|---|---|
+| 仓库 | `superuser404notfound/AetherEngine`（**不是** `AetherEngine/AetherEngine`） | GitHub API |
+| 最新 release | **`7.44.0`**，2026-10-20 发布，**prerelease=false** | Releases API |
+| 活跃度 | 最后推送 2026-10-20（与 release 同日）；**265 stars**；87 open issues | GitHub API |
+| 许可证 | **LGPL-3.0 + Apple Store / DRM Exception**（GitHub 标 `NOASSERTION`，因是自定义组合许可证） | LICENSE 原文 |
+| platforms | iOS 18.0 / tvOS 18.0 / **macOS 15.0** / visionOS 1.0 | README Requirements |
+| 工具链要求 | **Swift 6.4 / Xcode 27.0**；源码至少需要 **26.2 SDK** | README Requirements |
+| `swift-tools-version` | 6.1 | `Package.swift` |
+| 形态 | **纯 Swift 源码包**（`.target`，非 `binaryTarget`） | `Package.swift` |
+| 依赖 | `FFmpegBuild`(≥3.9.0)、`SMBClient`(≥0.3.1)、`LibDovi`(≥2.1.0)、`LibTrueHD`(≥3.0.0，仅 trait 开启时) | `Package.swift` |
+| FFmpeg 形态 | **动态框架**（dylib-in-framework，`@rpath`），LGPL-2.1-or-later | FFmpegBuild README |
+| FFmpeg 体积 | macOS universal（arm64+x86_64）**约 22.7 MB**；iOS/tvOS arm64 约 10.5 MB | FFmpegBuild README「Size」表 |
+| 落地案例 | Sodalite（Jellyfin/Apple TV）、AetherPlayer（macOS）、Silo、Moonfin、Vivid、LillyPlayer 等 **17 个** | README「Used by」 |
+
+#### 2.4.2 架构：它内部就是「双引擎」
+
+`docs/architecture.md` 原文把两条路径写得很清楚：
+
+**(a) Native AVPlayer pipeline（默认）**
+> Demux the source with libavformat, re-mux the elementary streams on the fly into HLS-fMP4, serve them from a local HTTP server on an ephemeral port ... point `AVPlayer` at the playlist. Apple's stack does all decode, all HDR / Dolby Vision signaling over HDMI, all audio routing.
+
+关键细节（原文）：
+- 本地 HTTP 服务器监听**所有网卡**（不是只 127.0.0.1），以便 **AirPlay 接收机能通过局域网访问**；带 per-session path token、32 连接上限（非回环 24）、10 秒头部超时。
+- 选 HLS-fMP4 而不是直接喂源 URL 的理由：「AVPlayer's progressive-download path won't accept arbitrary MKV containers, and even for MP4 sources it's brittle around Dolby Vision sample-description quirks and EAC3 `dec3` box variants.」
+
+**(b) Software path**
+> Demux the source, run video packets through libavcodec (dav1d for AV1, FFmpeg's native decoder for VP9 / VP8 / MPEG-4 Part 2 / MPEG-2 / VC-1) into `CVPixelBuffer`s, run audio through libavcodec into `CMSampleBuffer`s, render via `AVSampleBufferDisplayLayer` + `AVSampleBufferAudioRenderer` with `AVSampleBufferRenderSynchronizer` as the master clock.
+
+用于 AVPlayer 的 HLS-fMP4 管线不接受的编码：AV1（无硬解时）、VP9/VP8、MPEG-4 Part 2、MPEG-2、VC-1、**隔行 H.264**（AVPlayer 不反交错）。
+
+**对我们最重要的一点**：视图是**多态的**（README 原文）：
+> The view is polymorphic: under the hood the engine swaps the hosted CALayer (`AVPlayerLayer` for the native AVPlayer path, `AVSampleBufferDisplayLayer` for the SW dav1d fallback path) per session without the host having to know.
+
+也就是说，**我们不需要自己写两套画面输出层**——这正是 rev.2 双引擎方案里最麻烦的部分。
+
+#### 2.4.3 格式覆盖（README 原文归纳）
+
+| 类别 | 覆盖 |
 |---|---|
-| 许可证 | **LGPL-3.0 + App Store/DRM Exception**（自定义例外条款） |
-| platforms | iOS 18 / tvOS 18 / **macOS 15** / visionOS 1 |
-| swift-tools | 6.1 |
-| 架构 | FFmpeg demux → **两条路**：(a) 重新封装成 HLS-fMP4 交给 AVPlayer；(b) libavcodec 解码 + `AVSampleBufferDisplayLayer`/`AVSampleBufferAudioRenderer` |
-| 覆盖 | MKV/MP4/WebM/TS/AVI/OGG/FLV；H.264/HEVC/AV1/VP9/MPEG-2/VC-1；DVD/BD ISO |
-| HDR | HDR10 / HDR10+ / Dolby Vision / HLG |
-| 音频 | Atmos 直通、TrueHD/DTS 通过 "audio bridge" 转 EAC3 |
+| 容器 | MKV、MP4、WebM、MPEG-TS、AVI、ASF/WMV、OGG、FLV、RealMedia、3GP/3G2 |
+| 光盘 | DVD-Video、Blu-ray ISO（已解密），可选 title/chapter |
+| 视频（硬解） | H.264、HEVC、HEVC Main10（VideoToolbox）；AV1 Main（有硬件 AV1 时） |
+| 视频（软解） | AV1（dav1d）、VP9/VP8、MPEG-4 Part 2、MPEG-2、VC-1、QuickTime RLE、Flash 系、RealVideo、H.263、Theora |
+| HDR | HDR10、HDR10+（逐帧 ST 2094-40）、**Dolby Vision P5 / P7（8.1 或可选 FEL 双层）/ P8.1 / P8.4 / AV1 P10.x**、HLG、HDR Vivid |
+| 音频 | AAC、AC3、EAC3、FLAC、ALAC（stream-copy 无损）；TrueHD/MLP、DTS、DTS-HD MA、MP3、Opus、Vorbis、LPCM、WMA、RealAudio、AMR 等 |
+| Dolby Atmos | **EAC3+JOC 在所有路由上 stream-copy**（HDMI MAT 2.0 / AirPods 空间音频 / BT 降混）；TrueHD Atmos 与 DTS:X 可选 trait 渲染成 APAC |
+| 字幕 | **文本（SRT / ASS / SSA / VTT / mov_text）inline**；**图形（PGS / DVB / DVD、VobSub）以 `CGImage` 输出**；CEA-608；DVB teletext；**外挂文件是一等 track** |
+| PiP | **原生路径**：宿主可用 `currentAVPlayer` 或 `nativePlayerLayer` 建 `AVPictureInPictureController`；**软解路径**：`softwarePiPSource` 提供 `AVSampleBufferDisplayLayer`，且**在 PiP 窗口内合成字幕**（文本 + PGS/DVB 位图） |
+| Now Playing | 原生视频路径可选 `ownsVideoNowPlayingSession`（`MPNowPlayingSession`）；音频路径无条件拥有 |
+| 其它 | FrameExtractor（缩略图/截帧）、`installAudioTap()`、预热点 `prewarm`、直播+DVR、SMB、自定义 `IOReader`、自签证书 `serverTrustEvaluator` |
 
-**它的 App Store Exception 条款**（我读了 LICENSE 原文）明确授予：即使平台条款限制重签名、DRM、终端用户重链接，也允许通过 App Store / TestFlight 分发。这直接解决了 §3.3 的 4d0/4d1 难题。
+#### 2.4.4 它的「App Store Exception」到底写了什么
 
-**但**：
-- 单人维护（作者自述 "Vibe-coded ... in close pair-programming with Claude"）。
-- macOS 15 起，与我们部署目标一致（这点反而合适）。
-- 它是**引擎**（不是 UI），设计上就是给我们这种「自带 SwiftUI」的场景用的。
-- **未实测**，只在文档层面核实。
+LICENSE 原文（我读了全文，这是核心段落）：
 
-**结论**：列为**Plan B**。如果 MPVKit 的许可证问题无法接受、又不想自建 dylib，AetherEngine 是比 VLCKit 更贴合「Apple 原生 + 格式广度」的选项。但它把 FFmpeg 作为**源码依赖**引入（不是二进制），构建时间和可审计性都需要评估。
+> As an additional permission under Section 7 of the GNU General Public License v3 ... the copyright holder grants permission to distribute, install, and use this Program — and any modified versions thereof — through application stores and beta-distribution platforms operated by third parties (including but not limited to the Apple App Store and Apple TestFlight), even where the platform's terms impose restrictions on: signing or re-signing of the binary ...; tamper protection, FairPlay-style DRM ...; end-user redistribution ...; end-user re-linking ...
+
+**这条对我们已经不重要了**（Prism 开源后 LGPL 义务自然满足），但它说明**作者认真考虑过分发合规**，是个正面信号。
+
+README 同时明确一条**重要限制**：
+> The exception covers AetherEngine's own code; it does not extend to its dependencies.
+
+即：例外**不覆盖** FFmpeg/LibDovi/LibTrueHD。但 FFmpeg 走的是 **FFmpegBuild 的动态框架**（LGPL-2.1），动态链接本来就满足 LGPL 的重链接要求，所以这条不构成障碍。FFmpegBuild README 原文：
+> The shipped xcframeworks contain **dynamic frameworks** (dylib-in-framework, `@rpath` install names); Xcode embeds and signs them in the app bundle automatically when you link the package. **That is what keeps the LGPL relink requirement satisfiable for closed-source apps.**
+
+#### 2.4.5 需要警惕的地方
+
+| 项 | 说明 |
+|---|---|
+| **单人维护 + AI 辅助** | README 自述「vibe-coded ... in close pair-programming with Claude」，几乎每个 commit 带 `Co-Authored-By: Claude`。**这是真实的治理风险**，与 MPVKit 的「不常维护」是同一类问题，但至少它**活跃**（2026-10-20 还在发版）。 |
+| **87 个 open issues** | 相对 265 stars 偏高，说明问题不少（也说明有人真的在用）。 |
+| **工具链门槛硬** | 需要 Swift 6.4 / Xcode 27.0 / **26.2+ SDK**。我们是 Xcode 27.1 / Swift 6.4，满足；但 CI 镜像必须跟得上。 |
+| **依赖链深** | 4 个直接依赖，其中 `FFmpegBuild` 又是 binaryTarget（9 个 xcframework，含 dSYM 约 45 MB）。**首次 clone/构建体积仍需实测**（未测）。 |
+| **`traits` 在 XcodeGen 下不可用** | README 明说 XcodeGen 2.45.4 会**静默丢弃** `traits:`。我们工程用了 `project.yml`（XcodeGen），**若将来要开 TrueHD/DTS:X/DV-FEL 等 trait，必须手工 patch `.pbxproj` 或包一层本地 package**。 |
+| **默认只 HEVC/H.264/AV1 走原生** | 其余全部软解。软解 4K 的功耗/发热需实测。README 给了 M1 的实测数据（38 Mbit/s 4K HDR10：GPU 41 mW、CPU 4.4% of a core），但那是**作者自己的 benchmark 工具**测的，需独立验证。 |
 
 ### 2.5 其它已排除的方案
 
@@ -265,32 +335,60 @@ MPVKit issue #77 / PR #78：用户发现**「LGPL 版」的 FFmpeg 构建带了 
 
 ## 3. 对比矩阵
 
-### 3.1 主矩阵
+### 3.1 主矩阵（四引擎全景）
 
 图例：✅ 原生支持 ｜ 🟡 有条件/需额外工作 ｜ ❌ 不支持 ｜ ⬜ 不适用
 
-| 维度 | AVPlayer（原生） | libmpv / MPVKit | VLCKit 4 | AetherEngine |
+| 维度 | AVPlayer（裸） | **AetherEngine** | libmpv / MPVKit | VLCKit 4 |
 |---|---|---|---|---|
 | **MKV 容器** | ❌ 实测 `Cannot Open` | ✅ | ✅ | ✅ |
-| **HEVC / HEVC Main10** | ✅（需 `hvc1` tag） | ✅（VideoToolbox hwdec） | ✅ | ✅ |
-| **DTS / DTS-HD** | ❌ 无解码器 | ✅ 可解码，也可 `audio-spdif` 直通 | ✅ 可解码 | ✅（转 EAC3 桥接） |
-| **TrueHD / Atmos** | 🟡 仅 E-AC-3 JOC（Atmos）经 HLS/MP4 | ✅ 解码；`audio-spdif=truehd` 可尝试直通 | ✅ 解码 | ✅ Atmos 直通（EAC3+JOC 原样拷贝） |
-| **ASS / SSA** | ❌ HLS 只允许 WebVTT/IMSC1 | ✅ **libass**，支持 `sub-ass-override`/`sub-ass-style-overrides` | ✅ libass | ✅ |
-| **PGS（图形字幕）** | ❌ | ✅ | ✅ | ✅ |
-| **SRT** | 🟡 需转 WebVTT | ✅ 原生 | ✅ | ✅ |
-| **HLS 直封/转码兼容** | ✅ 唯一原生消费者 | 🟡 能播 HLS，但不用系统 HDR 通路 | 🟡 同上 | ✅ 自己产 HLS-fMP4 |
-| **字幕渲染质量** | ❌ 无 ASS | ✅✅ **最佳**（libass + libplacebo 可做 shader 级渲染） | ✅ 良好 | ✅ 良好 |
-| **音频直通（HDMI/SPDIF）** | 🟡 仅 AC3/EAC3，经系统 | ✅ `audio-spdif=ac3,eac3,dts,dts-hd,truehd`（实测选项被接受） | 🟡 有 passthrough 模块 | ✅ |
-| **HDR / 杜比视界** | ✅✅ **系统级握手**（Match Dynamic Range） | 🟡 自己 tone-map，`target-colorspace-hint` 可输出 EDR，但**不走系统 DV 握手** | 🟡 自己 tone-map（Swiftfin 注：色彩准确度可能有偏差） | ✅ 走 AVPlayer 时系统级 |
-| **画中画（AVPictureInPictureController）** | ✅ AVPlayerLayer 路径最稳 | ❌ **渲染到 CAMetalLayer，拿不到 PiP** | ✅ 4.0 支持（iOS+macOS） | 🟡 用 AVSampleBufferDisplayLayer 路径时可行（macOS 有已知缩放 bug） |
-| **AirPlay** | ✅✅ 系统级，视频+音频 | ❌ 不支持 | 🟡 音频有已知延迟 bug | ✅（走 AVPlayer 时） |
-| **Now Playing / 远程控制** | ✅ 自动 + `MPNowPlayingInfoCenter` | 🟡 需手动填 `MPNowPlayingInfoCenter`（框架在 macOS 可用） | 🟡 同左 | ✅ 内置 |
-| **性能与功耗** | ✅✅ 硬件解码 + 系统合成，最低功耗 | 🟡 软件栈更重；`gpu-next+MoltenVK` 有额外开销；作者注 Metal 支持只是 patch | 🟡 中等 | 🟡 取决于路径 |
-| **包体积增量** | **0** | **≈ 60–70 MB**（arm64，未压缩实测） | **≈ 200 MB+**（922 MB 下载包） | 待测（FFmpeg 源码构建） |
-| **Swift 6 并发安全** | ✅ Apple 已适配 | ✅ **实测零诊断**（C 表面，wrapper 自管） | 🟡 Objective-C API，无 Sendable 标注，需大量 `@preconcurrency` | 🟡 声明 Swift 6，未实测 |
-| **SPM 集成难度** | ⬜ 系统框架 | 🟡 一条 `.package` 即可，但**首次拉 350–380 MB / 29 个 binaryTarget** | 🟡 一条 `.package`，但 **922 MB 单包** | 🟡 源码编译 FFmpeg，构建慢 |
-| **许可证** | 系统框架，无限制 | ⚠️ **LGPL-3.0 + 静态链接 → 只能走 4d0** | ✅ **LGPL-2.1 + 动态框架 → 4d1 可行** | ✅ LGPL-3.0 + App Store 例外 |
-| **维护活跃度** | Apple 维护 | ⚠️ **作者明示「不会频繁维护」** | ✅ VideoLAN 官方，月更 | ⚠️ 单人维护 |
+| **HEVC / HEVC Main10** | ✅（需 `hvc1` tag） | ✅ VideoToolbox | ✅ VideoToolbox hwdec | ✅ |
+| **DTS / DTS-HD** | ❌ 无解码器 | ✅ 解码；可选 bridge 成 EAC3 | ✅ 解码；可 `audio-spdif` 直通 | ✅ 解码 |
+| **TrueHD / MLP** | ❌ | ✅ 解码；Atmos 对象需 `TrueHDObjectAudio` trait | ✅ 解码 | ✅ 解码 |
+| **Atmos（EAC3+JOC）** | 🟡 仅经 HLS/MP4 的 E-AC-3 | ✅✅ **所有路由 stream-copy**（HDMI MAT 2.0 / 空间音频） | 🟡 无对象直通（mpv 官方对比表） | 🟡 解成 PCM，无对象直通 |
+| **ASS / SSA** | ❌ HLS 只允许 WebVTT/IMSC1 | ✅ 文本 inline（`$subtitleCues` 的 `.richText` 带样式） | ✅ libass | ✅ libass |
+| **PGS（图形字幕）** | ❌ | ✅ 以 `CGImage` 输出；PiP 内也合成 | ✅ | ✅ |
+| **SRT** | 🟡 需转 WebVTT | ✅ 原生 | ✅ 原生 | ✅ |
+| **HLS 直封** | ✅ 唯一原生消费者 | ✅✅ **自己产 HLS-fMP4**（内部实现） | 🟡 能播，但不用系统 HDR 通路 | 🟡 同左 |
+| **字幕渲染质量** | ❌ 无 ASS | ✅ 良好（`.richText` 带颜色/粗斜体/字体/字号/对齐） | ✅✅ **最佳**（libass + libplacebo） | ✅ 良好 |
+| **音频直通（HDMI/SPDIF）** | 🟡 仅 AC3/EAC3 经系统 | ✅ EAC3+JOC stream-copy；TrueHD/DTS 可桥接 | ✅ `audio-spdif=ac3,eac3,dts,dts-hd,truehd` | 🟡 有 passthrough 模块 |
+| **HDR / 杜比视界** | ✅✅ 系统级握手 | ✅✅ **系统级**（DV P5/P7/P8.1/P8.4，Match Content） | 🟡 自 tone-map，**不走系统 DV 握手** | 🟡 自 tone-map，无 DV 显示 |
+| **画中画** | ✅ AVPlayerLayer 最稳 | ✅ 原生路径用 `currentAVPlayer`/`nativePlayerLayer`；软解路径用 `softwarePiPSource` | ❌ **渲染到 CAMetalLayer，拿不到 PiP** | ✅ 4.0 支持（iOS+macOS） |
+| **AirPlay** | ✅✅ 系统级 | ✅✅ 系统级（本地 HTTP 服务器监听全网卡专为此设计） | ❌ 不支持 | 🟡 音频有已知延迟 bug（VLCKit #544） |
+| **Now Playing** | ✅ 自动 | ✅ `MPNowPlayingSession`（可选）或宿主自管 | 🟡 需手动填 `MPNowPlayingInfoCenter` | 🟡 同左 |
+| **性能与功耗** | ✅✅ 最低 | 🟡 原生路径接近 AVPlayer；软解路径更重 | 🟡 软件栈重；Metal 支持是 patch | 🟡 中等 |
+| **包体积增量** | **0** | 🟡 FFmpeg 动态框架 **macOS universal ≈ 22.7 MB**（+ 引擎自身，**未实测**） | 🟡 arm64 未压缩 **≈ 67.6 MB**（一次性实验） | 🟡 **922 MB 下载包**，.app 增量未测 |
+| **Swift 互操作** | ✅ | ✅✅ **纯 Swift**，`async`/`await` + `@Published` | ❌ **C API**，需 `OpaquePointer` + 串行队列隔离层 | ❌ Objective-C，无 Sendable 标注 |
+| **Swift 6 并发** | ✅ | 🟡 声明 Swift 6.4，**未实测**（可能需 `@preconcurrency` 包 Combine） | 🟡 C 表面，wrapper 自管（一次性实验零诊断，不可复现） | 🟡 需大量 `@preconcurrency` |
+| **SPM 集成难度** | ⬜ 系统框架 | 🟡 一条 `.package`，但依赖链 4 层、含 binaryTarget；**`traits` 在 XcodeGen 下会被静默丢弃** | 🟡 建议 vendoring（§11）；走远程依赖会**触发钥匙串弹窗** | 🟡 一条 `.package`，但 **922 MB 单包** |
+| **许可证** | 系统框架 | ✅ LGPL-3.0 + App Store 例外；FFmpeg 走**动态**框架（LGPL-2.1） | ⚠️ LGPL-3.0 + **静态库** → 闭源时只能走 4d0 | ✅ LGPL-2.1 + **动态**框架 → 4d1 可行 |
+| **维护活跃度** | Apple 维护 | 🟡 **单人 + AI 辅助，但活跃**（2026-10-20 发版，265★） | ⚠️ **作者明示「不会频繁维护」** | ✅ VideoLAN 官方，月更 |
+
+### 3.2 MPVKit vs AetherEngine 正面对比（决策依据）
+
+这一节只比较两个**实际候选**，按「对 Prism 的重要性」排序。
+
+| 维度 | MPVKit（libmpv） | AetherEngine | 胜者 |
+|---|---|---|---|
+| **容器/编码覆盖** | 极广（mpv 全家桶） | 极广（FFmpeg demux + 软解兜底） | **平**（都够用） |
+| **ASS 渲染质量** | libass + libplacebo，可 shader 级 | 文本 cue 转 `.richText`（颜色/粗斜体/字体/字号/对齐） | **MPVKit 略优**（libass 原生排版更完整，尤其特效字幕） |
+| **PGS** | ✅ 原生 | ✅ `CGImage`，且 PiP 内合成 | **平** |
+| **PiP** | ❌ **不可能**（CAMetalLayer 渲染） | ✅ 原生 + 软解双路径 | **AetherEngine 决定性胜出** |
+| **AirPlay** | ❌ **不支持** | ✅ 系统级（专为 AirPlay 设计了全网卡监听） | **AetherEngine 决定性胜出** |
+| **Dolby Vision** | 🟡 自 tone-map，无系统 DV 握手 | ✅ P5/P7/P8.1/P8.4，真实显示器切换 | **AetherEngine 决定性胜出** |
+| **Atmos** | 🟡 无对象直通 | ✅ EAC3+JOC 全路由 stream-copy | **AetherEngine 胜** |
+| **HDR 在 macOS** | 🟡 `target-colorspace-hint` + EDR，需自己处理 | ✅ 走 AVPlayer 时系统级；`displayCapabilities` 有 macOS 适配 | **AetherEngine 胜** |
+| **Swift 互操作** | ❌ C API + 隔离层 | ✅ 纯 Swift，`async`/`await` | **AetherEngine 决定性胜出** |
+| **维护活跃度** | ⚠️ 作者明示不常维护 | 🟡 单人但活跃（发版次日仍在推） | **AetherEngine 胜** |
+| **体积** | ≈ 67.6 MB（arm64，一次性实验） | ≈ 22.7 MB（FFmpeg macOS universal）+ 引擎 | **AetherEngine 胜**（约 1/3） |
+| **许可证** | ⚠️ 静态库 + LGPL-3.0 | ✅ 动态 FFmpeg + App Store 例外 | **AetherEngine 胜** |
+| **集成难度** | 🟡 需 vendoring 绕开钥匙串问题 | 🟡 一条 `.package`，但依赖链深、`traits` 与 XcodeGen 冲突 | **平** |
+| **成熟度/案例** | 209★，130 fork | 265★，**17 个真实 App**（含 Jellyfin 客户端 Sodalite、macOS 播放器 AetherPlayer） | **AetherEngine 胜** |
+| **风险** | 停更 + 无 AirPlay/PiP | 单人维护 + 87 open issues + 工具链门槛硬 | **各有风险** |
+
+**结论：AetherEngine 在 9 个维度胜出，MPVKit 只在「ASS 渲染质量」上略优，其余持平。**
+
+mpv 唯一不可替代的优势是 **libass 的排版完整度**（动漫特效字幕、复杂样式）。如果将来发现 AetherEngine 的 `.richText` 对某类 ASS 还原不够，可以**只对那类内容**降级到 MPVKit——但这属于 Plan B 的触发条件，不是默认路径。
 
 ### 3.2 单引擎可行性判断
 
@@ -303,37 +401,37 @@ MPVKit issue #77 / PR #78：用户发现**「LGPL 版」的 FFmpeg 构建带了 
 
 **这就是「不推翻双引擎」的核心论据**：没有任何单引擎能同时拿到「格式全覆盖」和「macOS 原生体验（AirPlay/PiP/HDR/Now Playing）」。这两组能力分属两个技术栈，物理上无法在一个引擎里兼得——除非像 AetherEngine 那样**在一个框架内部做双路径**（本质仍是双引擎，只是封装在别人家里）。
 
-### 3.3 许可证：必须说清楚的部分
+### 3.3 许可证：开源后义务已解除
 
-#### LGPL-3.0 §4 原文（我下载了 `gnu.org/licenses/lgpl-3.0.txt` 逐条核对）
+#### 前提变更
 
-闭源分发（Combined Work）时，除了 4a（显著声明）、4b（附 GPL+LGPL 副本）、4c（启动版权声明）之外，**4d 必须二选一**：
+**Prism 已决定开源。** 这一条改变了整个许可证分析的前提：LGPL 的核心义务是「让接收者能修改库并重新链接」，而**Prism 自身源码公开**天然满足了这一点。
 
-> **4d0)** Convey the Minimal Corresponding Source ... and the Corresponding Application Code in a form suitable for, and under terms that permit, the user to **recombine or relink** the Application with a modified version of the Linked Version ...
->
-> **4d1)** Use a **suitable shared library mechanism** for linking with the Library. A suitable mechanism is one that (a) **uses at run time a copy of the Library already present on the user's computer system**, and (b) will operate properly with a modified version of the Library that is interface-compatible ...
+#### 具体到各组件
 
-#### 对 MPVKit 的推论
+| 组件 | 许可证 | 开源后是否有义务 | 说明 |
+|---|---|---|---|
+| **AetherEngine** | LGPL-3.0 + App Store 例外 | ✅ **已满足** | 我们修改引擎需同样以 LGPL 发布（README 原文：「Modifications to the engine itself still have to be released under LGPL」）。**只要我们不 fork 修改它，就无需额外动作**。 |
+| **FFmpegBuild**（AetherEngine 依赖） | LGPL-2.1-or-later | ✅ **已满足** | 以**动态框架**分发（`@rpath`），本来就走 4d1；开源后更无争议。 |
+| **LibDovi / LibTrueHD** | LGPL-3.0 / MIT+Apache-2.0 | ✅ **已满足** | LibTrueHD 的 Apache-2.0 部分要求携带 license 文本与 NOTICE（README 明示）。 |
+| **MPVKit**（Plan B） | LGPL-3.0，**静态库** | ✅ **已满足** | 静态链接走 4d0（提供可重链接的目标文件）；**开源后源码本身就是对应源**。rev.2 里「必须分发 .o」的结论**已失效**。 |
+| **VLCKit**（Plan C） | LGPL-2.1，动态框架 | ✅ 已满足 | — |
 
-MPVKit 产出的是**静态库**（实测 `file` → `current ar archive`；`otool -hv` → `filetype OBJECT`）。
+#### 仍然存在的注意事项（不要因为开源就完全放松）
 
-- **4d1 走不通**：静态链接后，库里没有「运行时使用用户机器上已有的副本」这回事。
-- **只能走 4d0**：随 App 分发 **Minimal Corresponding Source + 可重链接的应用目标文件（.o）**，让用户能自己重链接。
-- 这在 App Store 分发下**极其别扭**（要公开 .o、要提供重链接说明），且与 Apple 的签名/DRM 机制天然冲突。
+1. **第三方专利**：AetherEngine 的 `TrueHDObjectAudio` / `DTSXObjectAudio` / `DualLayerDolbyVision` / `DolbyVisionStillReshaping` 四个 trait，README 原文：「These components may be subject to third-party patent licensing. Integrators who enable them are responsible for their own licensing.」——**默认全关，我们也建议保持关闭**。
+2. **许可证文本要随分发附带**：LGPL 的 4a/4b/4c 义务（显著声明、附许可证副本、启动版权声明）**不会因开源消失**。要有一个「开源许可」页面列出 AetherEngine / FFmpeg / LibDovi / LibTrueHD 及其许可证全文。
+3. **App Store 例外不覆盖依赖**：README 明说「The exception covers AetherEngine's own code; it does not extend to its dependencies.」——若将来要上架且启用 trait，需单独评估。
+4. **我们不能闭源回去**：一旦用了 LGPL-3.0 的 AetherEngine 并分发，Prism 就必须保持开源（LGPL 允许闭源**应用**，但若我们修改引擎则修改部分需 LGPL；且 Prism 既然开源，这条不是问题）。**但要注意：如果将来 Prism 想闭源商业化，这条会成为障碍**——届时应选 VLCKit（LGPL-2.1 + 动态）而非 AetherEngine。
 
-#### 对 VLCKit 的推论
+#### 历史记录（已失效，仅存档）
 
-VLCKit 是**动态框架**（NEWS 明确 "removed support to compile VLCKit as a static framework"）。
-
-- **4d1 可行**：把 VLCKit.framework 作为独立动态库嵌入 .app，用户可替换其中的二进制。
-- 加上 4a/4b/4c 的声明义务即可。
-- **这是 VLCKit 在许可证维度完胜 MPVKit 的原因**，与技术能力无关。
+rev.2 曾基于「闭源 + MPVKit 静态库」推导出「只能走 LGPL-3.0 §4d0（随 App 分发 .o）」。该推导的**条款引用本身是正确的**（§4 原文 4d0/4d1 二选一），但**前提已不成立**。`docs/DECISION-mpv-license.md` 整份备忘基于旧前提，**结论作废**。
 
 #### 我不能替你确认的部分
 
-- FSF 官方 GPL FAQ 页面我抓下来全文搜 `App Store` / `iTunes` / `Apple` / `iPhone`，**命中数均为 0**。即 **FSF 没有关于 App Store 的专门条目**，任何「FSF 说 App Store 与 GPL 不兼容」的说法都是二手转述，我不会写。
-- 可引用的**间接历史证据**：VLC 2011 年初因 GPLv2 与 App Store 条款冲突被下架；2011-10 将引擎部分改为 LGPLv2+；2013-07 以 MPL-2.0 重新上架 iOS。这说明「GPL 系 + App Store」历史上确有冲突，且业界解法是**换许可证或换动态链接**。
-- **本文不构成法律意见。** 上线前必须由法务确认，或直接采用 AetherEngine 那种「显式 App Store 例外」的许可证。
+- FSF 官方 GPL FAQ 页面我抓取全文搜 `App Store` / `iTunes` / `Apple` / `iPhone`，**命中数均为 0**。**FSF 没有关于 App Store 的专门条目**，任何「FSF 说……」的说法都是二手转述，本文不采用。
+- **本文不构成法律意见。** 开源发布前建议由懂开源合规的人过一遍 NOTICE/许可证清单。
 
 ---
 
@@ -341,52 +439,145 @@ VLCKit 是**动态框架**（NEWS 明确 "removed support to compile VLCKit as a
 
 ### 4.1 结论
 
-**双引擎，按内容选路，AVPlayer 优先。**
+**AetherEngine 单引擎，我们只做薄适配层。**
 
 ```
-                    ┌─────────────────────────┐
-                    │   EngineSelector        │
-                    │  (纯函数，无副作用)      │
-                    └───────────┬─────────────┘
-                                │ EngineChoice
-              ┌─────────────────┴──────────────────┐
-              ▼                                    ▼
-   ┌────────────────────┐              ┌────────────────────┐
-   │ AVPlayerEngine     │              │ MPVEngine          │
-   │ MP4 / HLS / 直封    │              │ MKV / ASS / PGS    │
-   │ AirPlay / PiP / HDR│              │ DTS / TrueHD       │
-   └────────────────────┘              └────────────────────┘
-              │                                    │
-              └──────────────┬─────────────────────┘
-                             ▼
-                  ┌────────────────────┐
-                  │  PlaybackEngine    │  ← 协议，引擎无关
-                  │  (actor / MainActor)│
-                  └────────────────────┘
+                    ┌──────────────────────────────────┐
+                    │  PlaybackEngine（我们的协议）      │
+                    │  引擎无关，纯 Swift，零泄漏        │
+                    └──────────────┬───────────────────┘
+                                   │
+                    ┌──────────────▼───────────────────┐
+                    │  AetherPlaybackEngine            │
+                    │  （适配层：Combine → AsyncStream） │
+                    └──────────────┬───────────────────┘
+                                   │
+                    ┌──────────────▼───────────────────┐
+                    │  AetherEngine（第三方，LGPL-3.0）  │
+                    │  ┌────────────┐  ┌────────────┐  │
+                    │  │ Native     │  │ Software   │  │
+                    │  │ AVPlayer   │  │ libavcodec │  │
+                    │  │ HLS-fMP4   │  │ + ASBDL    │  │
+                    │  └────────────┘  └────────────┘  │
+                    └──────────────────────────────────┘
 ```
 
-### 4.2 为什么不是「AVPlayer 优先 + 全走 HLS 直封」
+**我们不再自己实现双引擎。** AetherEngine 内部已经有「FFmpeg demux → HLS-fMP4 → AVPlayer」与「libavcodec 软解 → AVSampleBufferDisplayLayer」两条路径，并且**对宿主透明地按会话切换**（README 原文：视图多态，自动换 `AVPlayerLayer` / `AVSampleBufferDisplayLayer`）。
 
-理论上可以让 Emby 把所有 MKV 直封成 HLS-fMP4 喂给 AVPlayer，这样只需一个引擎。**不采用**，因为：
+我们要写的只有一层**薄适配**：把它的 Combine `@Published` 桥成我们的 `AsyncStream`，把它的 `TrackInfo` 映射成我们的 `MediaTrack`。见 §4.4。
 
-1. **DTS/TrueHD 过不去**（HLS 音频白名单不含），必须转码音频 → 服务器 CPU + 音质损失。
-2. **ASS/PGS 过不去**（HLS 字幕只允许 WebVTT/IMSC1），只能烧录 → 必须重新编码视频 → 画质损失 + 服务器重负载。
-3. **依赖 Emby 服务端配置正确**（fMP4 输出、`hvc1` tag），而这些在不同版本上行为不一致（§1.4）。把核心体验押在服务端配置上，脆弱。
-4. 直封需要客户端做「先探测再请求」的两段式，首帧延迟更高。
+### 4.2 为什么推翻 rev.2 的「AVPlayer + libmpv 双引擎」
 
-**结论**：HLS 直封作为**降级路径**保留，不作为主路径。
+rev.2 的双引擎方案在技术上是成立的，但代价是：
 
-### 4.3 什么情况下应该推翻本方案
+1. **要自己写两套画面输出层**（`AVPlayerLayer` 一套、`CAMetalLayer` + `wid` 一套），且 mpv 那套**渲染从未跑通**（§7.2）。
+2. **要自己维护 `OpaquePointer` 隔离层**（§5.1 的零泄漏约束），这是一整层样板代码。
+3. **mpv 路径拿不到 AirPlay / PiP / 系统 DV 握手**，造成 UX 不对称，必须在 UI 上解释「为什么这个片子不能 AirPlay」。
+4. **mpv 路径的字幕要自己做 libass 样式映射**（`sub-ass-style-overrides` 的 BGR 颜色格式等，容易错）。
+5. MPVKit 作者自己建议生产环境用 AetherEngine。
 
-诚实列出推翻条件，供后续复核：
+**AetherEngine 把这 5 条全部解决了**，代价是引入一个单人维护的第三方依赖。考虑到 Prism 是开源项目、且 AetherEngine 已有 17 个真实 App 在用（含 Jellyfin 客户端 Sodalite），这个代价可接受。
+
+### 4.3 为什么仍然保留 `PlaybackEngine` 抽象
+
+即使只有一个实现，抽象层仍然要留。理由不是「为了将来换引擎」这种空话，而是：
+
+1. **AetherEngine 要求 Swift 6.4 / Xcode 27.0 / 26.2+ SDK**。若 CI 或某台开发机跟不上，我们需要能快速回退。
+2. **它 87 个 open issues**，且是单人维护。**必须有 Plan B**（§4.5）。
+3. **UI 层不应直接依赖第三方的 Combine publisher**。用我们自己的 `AsyncStream<PlaybackEvent>`，UI 才不会被 AetherEngine 的 API 变更牵着走。
+4. **测试**：`PlaybackEngine` 协议让我们能写一个 `MockPlaybackEngine` 做 UI 测试，不必启动真引擎。
+
+> **注意**：抽象层不是「为了抽象而抽象」。它的验收标准是：**`import AetherEngine` 只出现在 `AetherPlaybackEngine.swift` 一个文件里**（§10.2）。
+
+### 4.4 AetherEngine → `PlaybackEngine` 映射
+
+这是本文最实用的部分。左侧是我们的协议（§5.4），右侧是 AetherEngine 的实际 API（README / `docs/api.md` 原文）。
+
+| 我们的协议成员 | AetherEngine 对应 | 适配方式 |
+|---|---|---|
+| `load(_ source:)` | `try await player.load(url:startPosition:options:)` | 直接映射；`PlaybackSource.url(headers:)` → `LoadOptions(httpHeaders:)` |
+| `unload()` | `player.stop()` | 直接映射 |
+| `play()` | `player.play()` | 直接映射（**注意：它是同步的**） |
+| `pause()` | `player.pause()` | 直接映射 |
+| `seek(to:precise:)` | `await player.seek(to:)` | 直接映射；`precise` 参数它没有对应物，忽略 |
+| `setRate(_:)` | `player.setRate(1.5)` | 直接映射；**它内部 clamp 到 `maxSupportedRate`**（2x 视频 / 3x 纯音频） |
+| `setVolume(_:)` | **无直接对应** | ⚠️ **缺口**：README/API 文档中没有 `setVolume`。需查源码或改用系统音量。**待验证** |
+| `setMuted(_:)` | **无直接对应** | ⚠️ **缺口**，同上 |
+| `tracks` | `player.audioTracks` + `player.subtitleTracks` | 映射 `TrackInfo` → `MediaTrack`；**视频轨它不暴露**（单视频轨场景够用） |
+| `selectAudioTrack(_:)` | `player.selectAudioTrack(index: trackID)` | 直接映射 |
+| `selectSubtitleTrack(_:)` | `player.selectSubtitleTrack(index: streamID)` | 直接映射；`nil` → `player.clearSubtitle()` |
+| `addExternalSubtitle(_:language:title:)` | `player.addExternalSubtitleTrack(ExternalSubtitleTrack(url:name:language:sourceStreamIndex:))` | 返回 `TrackInfo`，取其 `id` 作为我们的 `TrackID` |
+| `removeSubtitleTrack(_:)` | **无直接对应** | ⚠️ **缺口**：只有 `clearSubtitle()`（取消选中），没有移除已注册的外挂轨。**待验证** |
+| `setSubtitleDelay(_:)` | `player.setSoftwareSubtitleDelay(_:)` | ⚠️ **语义差异**：它只影响**软解路径合成进 PiP 帧**的字幕；原生路径的 AVPlayer rendition 不受影响（文档明示）。我们 UI 上必须说明 |
+| `setSubtitleStyle(_:)` | **无直接对应** | ⚠️ **缺口**：`.richText` 带样式但那是**字幕自带的**，不是用户偏好。用户改字号/颜色/描边**没有 API**。见下方「最大缺口」 |
+| `state` | `player.$state` + `player.$playbackPhase` + `player.clock.$currentTime` 等 | **需要组合**：`$playbackPhase` 是最接近的单一真相源 |
+| `events` | 多个 `@Published` + `PassthroughSubject` | **需要桥接**：见 §4.5 |
+| `makeVideoView()` | `AetherPlayerSurface(engine:)`（SwiftUI）或 `AetherPlayerView` + `player.bind(view:)` | ⚠️ **返回类型不匹配**：我们协议要 `NSView`，它给的是 SwiftUI `View`。**改协议**：让 `makeVideoView()` 返回 `AnyView`，或直接用 `AetherPlayerSurface` |
+| `supportsPictureInPicture` | 恒 `true`（原生路径）；软解路径看 `softwarePiPSource != nil` | 映射 |
+| `supportsAirPlay` | 恒 `true`（原生路径）；`$airPlayPictureStaysLocal` 表示软解路径只有声音过去 | 映射，**注意这个细分状态** |
+| `nowPlayingSnapshot` | `player.videoNowPlayingSession` / `setVideoNowPlayingInfo(_:)` | 若 `ownsVideoNowPlayingSession = true` 则由引擎管；否则我们自管 |
+
+#### 三个必须处理的缺口
+
+**缺口 1：`$state` 是 Combine，不是 `AsyncStream`**
+
+这是主管点名要说明的。桥接方案：
+
+```swift
+// 用 AsyncStream 的 bufferingNewest 避免 UI 追不上
+func events() -> AsyncStream<PlaybackEvent> {
+    AsyncStream { continuation in
+        let c1 = engine.$playbackPhase.sink { phase in
+            continuation.yield(.stateChanged(map(phase)))
+        }
+        let c2 = engine.$audioTracks.sink { tracks in
+            continuation.yield(.tracksChanged(map(tracks)))
+        }
+        let c3 = engine.clock.$bufferedPosition.sink { pos in
+            continuation.yield(.bufferStateChanged(...))
+        }
+        continuation.onTermination = { _ in
+            c1.cancel(); c2.cancel(); c3.cancel()
+        }
+    }
+}
+```
+
+**注意**：`AnyCancellable` 不是 `Sendable`，在 Swift 6 严格并发下需要小心。若报错，用 `@preconcurrency import Combine` 或把 sink 关在主 actor 上。
+
+**缺口 2：字幕样式（`setSubtitleStyle`）没有 API**
+
+这是**产品级缺口**，不是适配问题。AetherEngine 的字幕是「引擎给你 cues，你自己画」的模式：
+- 文本 cue：`$subtitleCues` → `.text(String)` 或 `.richText([SubtitleTextRun])`，**你自己用 SwiftUI/TextKit 渲染**
+- 图形 cue：`.image(SubtitleImage)`
+
+**好消息**：因为字幕是我们自己画的，**用户字号/颜色/描边偏好完全由我们控制**——这反而比 mpv 的 `sub-ass-style-overrides` 更灵活。
+**坏消息**：ASS 的复杂排版（定位、特效、karaoke）在 `.richText` 里只能近似还原，**不如 libass 精确**。这是 §3.2 里 MPVKit 唯一胜出的维度。
+
+**缺口 3：`setVolume` / `setMuted` 未在文档中找到**
+
+README 和 `docs/api.md` 的 transport 段列了 `play/pause/togglePlayPause/setRate/seek/stop`，**没有音量**。两种可能：① 引擎不管音量（靠系统音量）；② 有 API 但没写进文档。**必须先查源码确认**，这是集成 spike 的第一件事。
+
+### 4.5 什么时候切回 MPVKit（Plan B 触发条件）
+
+| 触发条件 | 说明 |
+|---|---|
+| **AetherEngine 无法编译**（工具链/SDK 不满足） | 最硬的条件。若 Xcode 27.1 + 26.2 SDK 仍编不过，直接切 |
+| **ASS 渲染质量不可接受** | 用户反馈特效字幕/双语字幕排版错乱，且 `.richText` 无法修复 |
+| **软解路径功耗过高** | 4K HEVC 软解导致风扇狂转/掉帧（注意：HEVC 默认走硬解，这条主要影响 VP9/AV1/MPEG-2 等） |
+| **AetherEngine 停更** | 连续 6 个月无 release |
+| **`setVolume` 等关键缺口无法绕过** | 若音量控制只能靠系统音量，UX 不可接受 |
+
+切回时，`PlaybackEngine` 协议不变，只需新增 `MPVPlaybackEngine`（§11 保留了 MPVKit 的完整集成资料）。
+
+### 4.6 什么情况下应该推翻整个方案
 
 | 若发现 | 则改为 |
 |---|---|
-| 用户库里 MKV 占比 < 20%，且几乎无 DTS/ASS | **纯 AVPlayer + 服务端转码**，省掉 60 MB 和全部许可证麻烦 |
-| 法务认定 4d0（分发 .o）不可接受，且不愿自建 dylib | **换 VLCKit 单引擎**（动态框架，4d1 合规），接受 UX 降级 |
-| AetherEngine 实测稳定且许可证可接受 | **换 AetherEngine 单引擎**（它内部已做双路径，我们少维护一层） |
-| mpv 渲染在 macOS 15 上无法稳定嵌入 SwiftUI | **放弃 mpv**，退化为 AVPlayer + 服务端转码 |
-| 我们只需要「能播」，不需要 AirPlay/PiP/HDR | **VLCKit 单引擎**最省事 |
+| 用户库里 MKV 占比 < 20%，且几乎无 DTS/ASS | **纯 AVPlayer + 服务端转码**，省掉所有第三方依赖 |
+| 只需要「能播」，不要 AirPlay/PiP/HDR | **VLCKit 单引擎**（LGPL-2.1 动态框架，成熟稳定） |
+| AetherEngine 与 MPVKit 都不可用 | **VLCKit** 兜底，接受 UX 降级 |
+| 产品要求闭源商业化 | **不能选 AetherEngine**（LGPL-3.0 会传染修改部分）；选 VLCKit |
 
 ---
 
@@ -952,10 +1143,19 @@ final class PrismMetalLayer: CAMetalLayer {
 - PiP / AirPlay / Now Playing
 - Emby 网络集成（用本地文件）
 
-### 7.2 已完成的验证结果（本机实测，2026-10-21）
+### 7.2 一次性验证实验记录（非工程内集成，产物已清理、不可复现）
+
+> **证据等级声明（务必先读）**
+>
+> 本节记录的是 2026-10-21 的一次**离线探索性实验**：手工 `swiftc` 直接链接 29 个解压后的 xcframework，**完全绕开 SwiftPM / git / 网络凭据**。
+>
+> - 它**不是** Prism 工程内的集成验证，`Package.swift` 里没有 MPVKit 依赖，Xcode 工程没有链接它。
+> - 实验产物目录（`.spike/mpv/`，含 vendor/ 与可执行文件）**已被清理，当前不存在**。因此**任何人无法复现本节结果**，包括作者本人。
+> - 该实验触发了 macOS 钥匙串弹窗事故（SwiftPM 解析 GitHub 依赖时调用 `gh auth git-credential`），团队因此决定**放弃 SwiftPM 远程依赖**，改用 vendoring（§11）。
+> - **结论**：本节内容仅供实现时参考「API 大致长什么样、哪些属性名存在」，**不得作为「已验证可用」引用**。正式验证必须在 vendoring 落地后于工程内重做。
 
 **环境**：macOS 27.0 / Xcode 27.1 / Swift 6.4 / arm64
-**依赖**：MPVKit `1.0.0`，29 个 xcframework 手动 `curl` 下载（**不走 SwiftPM，避免 git 凭据问题**）
+**依赖**：MPVKit `1.0.0`，29 个 xcframework 手动 `curl` 下载（不走 SwiftPM）
 
 **编译命令**（关键点：`-swift-version 6 -strict-concurrency=complete`）：
 
@@ -1034,7 +1234,7 @@ client_api=131077  (mpv 2.5 => 2*65536+5 = 131077)
     ytdl=yes          ← ⚠️ 默认是 yes，必须显式关掉
 ```
 
-**结论：**
+**结论（一次性实验的观察结果，非工程基线）：**
 
 | 验证项 | 结果 |
 |---|---|
@@ -1048,13 +1248,17 @@ client_api=131077  (mpv 2.5 => 2*65536+5 = 131077)
 | `speed` / `volume` / `seek` / buffering 属性 | ✅ |
 | `audio-spdif` 选项被接受 | ✅（**只证明选项存在，未证明 HDMI 真的直通**） |
 | Swift 6 严格并发编译 | ✅ 零诊断 |
+| **窗口渲染（`gpu-next`+MoltenVK）** | ❌ **未跑通** |
+| **硬件解码（`hwdec-current`）** | ❌ 未验证（`vo=null` 下不解码） |
+
+> ⚠️ 上表「✅」的含义是「那次离线实验里观察到预期行为」，**不是「Prism 工程里已验证」**。产物已清理，不可复现，请按 §9.2 的待验证清单在 vendoring 落地后重做。
 
 **两个意外发现（必须写进实现要求）：**
 
 1. **`ytdl` 默认是 `yes`**。这意味着 libmpv 遇到未知 URL 可能尝试调用 youtube-dl 子进程。**必须显式 `mpv_set_option_string(h, "ytdl", "no")`**，否则是安全与性能双重隐患。
-2. **`hwdec-current` 在 `vo=null` 下是 `no`**（因为没有视频输出，不解码）。这是预期行为，但也说明 **spike 没有验证硬件解码路径**。
+2. **`hwdec-current` 在 `vo=null` 下是 `no`**（因为没有视频输出，不解码）。这是预期行为，但也说明 **该实验没有验证硬件解码路径**。
 
-### 7.3 已验证的 Swift 6 并发模型
+### 7.3 Swift 6 并发模型（设计建议，基于该次实验的编译观察）
 
 ```swift
 final class MPVCore: @unchecked Sendable {
@@ -1075,12 +1279,12 @@ final class MPVCore: @unchecked Sendable {
 
 | 时段 | 任务 | 产出 |
 |---|---|---|
-| 0–2h | 环境：`curl` 拉 29 个 xcframework 到 `.spike/mpv/vendor/`（**不用 SwiftPM**）；写 `MPVCore`；`swiftc` 编过 | 能 `mpv_create` + `mpv_initialize` |
+| 0–2h | 环境：按 §11 把 xcframework vendoring 进 `ThirdParty/MPVKit/`，`Package.swift` 用 `binaryTarget(path:)`，工程能编译 | `import Libmpv` 能过 |
 | 2–4h | 加载 MKV，打印 `track-list`；验证音轨切换 | §7.2 的 [1][3] |
 | 4–5h | 外挂 ASS：`sub-add` + `sub-ass-override` + `sub-delay` | §7.2 的 [4] |
 | 5–8h | **渲染**：`wid` + `CAMetalLayer` + `gpu-next/moltenvk`，在 `NSViewRepresentable` 里出画面 | 一个能显示 MKV 画面的 SwiftUI 视图 |
 
-> **风险提示**：前 5 小时的部分我已经跑通（§7.2），真正的未知在 5–8h 的渲染段。**如果渲染段 3 小时搞不定，立刻降级到 render API 方案，或直接放弃 mpv 路线**（回到 §4.3 的推翻条件）。
+> **风险提示**：0–5h 的部分在一次性离线实验中观察到过预期行为（§7.2），但**未在工程内复现**。真正的未知在 5–8h 的渲染段——**该段从未跑通**。**如果渲染段 3 小时搞不定，立刻降级到 render API 方案，或直接放弃 mpv 路线**（回到 §4.3 的推翻条件）。
 
 ### 7.5 渲染段代码骨架（未验证部分）
 
@@ -1186,8 +1390,10 @@ init(layer: CAMetalLayer) {
 | **R1** | **LGPL-3.0 + 静态链接 → 只能走 4d0（分发 .o）**，App Store 分发极其别扭 | 🔴 高 | 可能无法上架，或需要公开目标文件 | 决策备忘 A/B/C 三方案；**首选 A（附 .o）**，次选 B（自建 dylib，把 MPVKit 的静态库重新链接成动态库），最后 C（换 VLCKit/AetherEngine） |
 | **R2** | **MPVKit 维护不活跃**，作者明示「不会频繁维护」并建议生产环境用 AetherEngine | 🔴 高 | 上游停更 → 无法跟进 mpv/FFmpeg 安全修复 | ① 锁版本 `1.0.0`；② 把「自建构建脚本」纳入预案（MPVKit 的 `Makefile` 开源，可自己编）；③ 抽象层保证可换引擎 |
 | **R3** | **mpv 路径拿不到 AirPlay / PiP / 系统 HDR 握手**，造成 UX 不对称 | 🟠 中高 | 用户看 MKV 时不能 AirPlay 到电视、不能 PiP | ① UI 上明确标注能力（灰色禁用 + 说明）；② 提供「为此内容转码以获得 AirPlay」的显式选项；③ 长期看 AetherEngine 的 AVPlayer 路径能补上 |
-| **R4** | **渲染段（`gpu-next` + MoltenVK + `wid`）未实测**，且 MPVKit README 自己说「Metal 支持只是 patch 版，遇到问题不奇怪」 | 🟠 中高 | 可能整体方案不可行 | spike 优先验证；Plan B 是 render API；Plan C 是放弃 mpv 回到服务端转码 |
-| **R5** | **首次集成下载 350–380 MB / 29 个 binaryTarget**，CI 与新人上手成本高 | 🟡 中 | 构建慢、CI 缓存难做 | ① 用 `.spike/` 预下载 + 本地 `binaryTarget(path:)`；② CI 缓存 `SourcePackages`；③ 文档写明预期耗时 |
+| **R4** | **渲染段（`gpu-next` + MoltenVK + `wid`）从未跑通**，且 MPVKit README 自己说「Metal 支持只是 patch 版，遇到问题不奇怪」 | 🟠 中高 | 可能整体方案不可行 | spike 优先验证；Plan B 是 render API；Plan C 是放弃 mpv 回到服务端转码 |
+| **R5** | **首次集成下载 350–380 MB / 29 个 binaryTarget**，CI 与新人上手成本高 | 🟡 中 | 构建慢、CI 缓存难做 | **改用 vendoring（§11）**：二进制入库，零网络、零 git、零钥匙串；CI 不需要联网 |
+| **R11** | **SwiftPM 解析 GitHub 依赖会触发 macOS 钥匙串弹窗**（本机 git 配置了 `credential.helper = gh auth git-credential`），已实际打断用户 3 次 | 🔴 高 | 开发体验破坏、代理会话被迫中断 | **不再使用 SwiftPM 远程依赖**，改 vendoring（§11）。若必须用远程依赖，需 `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null`（**注意：`GIT_CONFIG_COUNT` + 空 helper 压不住 `~/.gitconfig` 里的多行 helper 配置**） |
+| **R12** | **MPVKit 集成状态 = 未实测**，本文 §7.2 的实验不可复现 | 🟠 中高 | 可能低估集成难度 | vendoring 落地后，在工程内按 §7.6 清单重做；在此之前不要把 mpv 当既定能力排期 |
 | **R6** | **Emby 服务端 fMP4 行为版本相关**，默认可能出 TS，导致 HEVC 被迫转码 | 🟡 中 | 降级路径可能失效 | 在 DeviceProfile 显式 `Container: mp4`；实测多版本；失败则回落到 libmpv 直连 |
 | **R7** | **mpv `ytdl` 默认 `yes`**，未知 URL 可能拉起外部进程 | 🟡 中 | 安全 / 性能隐患 | 显式 `ytdl=no`（实测确认默认是 yes） |
 | **R8** | **第三方二进制可能带 `--enable-nonfree`**（MPVKit 历史上出过，issue #77） | 🟡 中 | 产物「不可再分发」，许可证污染 | 每次升级后 `strings Libavcodec \| grep nonfree` 复核（`1.0.0` 已验证干净） |
@@ -1215,11 +1421,11 @@ init(layer: CAMetalLayer) {
 | V11 | MPVKit 产物是**静态库**（`current ar archive`，`otool -hv` → `filetype OBJECT`） | 本机实测 `file` / `otool` |
 | V12 | `1.0.0` 的 Libavcodec 只含 `libavcodec license: LGPL version 3 or later`，无 nonfree 字样 | 本机实测 `strings` |
 | V13 | MPVKit release 共 36 个 asset，其中 8 个是 `*-all.zip` 汇总包（SPM 不下载） | GitHub Releases API |
-| V14 | 29 个非 GPL xcframework 下载约 350–380 MB；arm64 macOS slice 未压缩合计 **≈ 67.6 MB**（Libshaderc 15.7 / Libavcodec 9.8 / Libcrypto 8.7 / Libmpv 6.0 …） | 本机实测：curl 下载 + 解压 + `lipo -thin arm64` + `stat` |
-| V15 | `mpv_client_api_version()` 返回 `131077`（= mpv 2.5） | 本机实测 |
-| V16 | **`-swift-version 6 -strict-concurrency=complete` 下 wrapper 编译零诊断** | 本机实测 swiftc |
-| V17 | 实测通过：MKV 解封装、HEVC Main10（`yuv420p10`）、E-AC-3、双音轨切换、非法 aid 回落 `no`、`sub-add` rc=0、`sub-delay` 可写、`sub-ass-override`/`sub-ass-style-overrides` 接受、`speed`/`volume`/`seek`/`paused-for-cache`/`cache-buffering-state` 可用、`audio-spdif` 接受 | 本机实测运行 |
-| V18 | **mpv `ytdl` 默认值为 `yes`** | 本机实测（读取属性） |
+| V14 | 29 个非 GPL xcframework 下载约 350–380 MB；arm64 macOS slice 未压缩合计 **≈ 67.6 MB**（Libshaderc 15.7 / Libavcodec 9.8 / Libcrypto 8.7 / Libmpv 6.0 …） | 本机实测：curl 下载 + 解压 + `lipo -thin arm64` + `stat`（**一次性实验，产物已清理**） |
+| V15 | `mpv_client_api_version()` 返回 `131077`（= mpv 2.5） | 一次性实验（产物已清理，不可复现） |
+| V16 | 一次性实验中 `-swift-version 6 -strict-concurrency=complete` 下 wrapper 编译零诊断 | 一次性实验（产物已清理，**不可复现**；需在工程内重验） |
+| V17 | 一次性实验中观察到：MKV 解封装、HEVC Main10（`yuv420p10`）、E-AC-3、双音轨切换、非法 aid 回落 `no`、`sub-add` rc=0、`sub-delay` 可写、`sub-ass-override`/`sub-ass-style-overrides` 接受、`speed`/`volume`/`seek`/`paused-for-cache`/`cache-buffering-state` 可用、`audio-spdif` 接受 | 一次性实验（产物已清理，**不可复现**） |
+| V18 | 一次性实验中读到 mpv `ytdl` 默认值为 `yes` | 一次性实验；**旁证**：`mpv_options.rst` 中 `--ytdl` 默认值文档亦为 yes |
 | V19 | mpv 命令/属性名：`sub-add <url> [flags] [title] [lang]`、`sub-delay`、`sid`/`aid`/`vid`、`track-list/N/{type,id,codec,lang,default}`、`time-pos`、`duration`、`paused-for-cache`、`cache-buffering-state`、`eof-reached`、`core-idle`、`demuxer-cache-time`、`seeking` | https://raw.githubusercontent.com/mpv-player/mpv/master/DOCS/man/input.rst |
 | V20 | mpv 选项名：`sub-ass-override=<no\|yes\|scale\|force\|strip>`、`sub-ass-style-overrides`、`sub-outline-size`（`sub-border-size` 为别名）、`sub-back-color`、`sub-align-y`、`sub-margin-y`、`audio-spdif`（支持 ac3/dts/dts-hd/eac3/truehd/dsd）、`hwdec=videotoolbox` 需 `vo=gpu/gpu-next` 或 `vo=libmpv` | https://raw.githubusercontent.com/mpv-player/mpv/master/DOCS/man/options.rst |
 | V21 | macOS 上 libmpv 的 `wid` 被解释为 `NSView*`，且注明 "Setting vo=libmpv" 是唯一受支持方式 | https://github.com/mpv-player/mpv/commit/6fbd93b38f653bdd6ca765a85cecb3a6ba9ee3da |
@@ -1278,14 +1484,14 @@ init(layer: CAMetalLayer) {
 
 ### 10.1 集成 MPVKit 时
 
-- [ ] 锁 `exact: "1.0.0"`（非 prerelease）
+- [ ] 按 §11 vendoring，**不使用 SwiftPM 远程依赖**
+- [ ] 锁 `1.0.0`（非 prerelease）
 - [ ] `strings Libavcodec | grep -i nonfree` → **必须无输出**
 - [ ] `mpv_set_option_string(h, "ytdl", "no")` —— 默认是 `yes`
 - [ ] `mpv_set_option_string(h, "config", "no")` —— 不读用户 `~/.config/mpv`
 - [ ] 所有 mpv 选项在 `mpv_initialize` **之前**设置
 - [ ] `wid` 传 `CAMetalLayer`，且 `MetalLayer` 的两个 workaround 必须抄
 - [ ] `mpv_terminate_destroy` 在 `deinit` 的 `queue.sync` 里调用
-- [ ] 首次构建预留 350–380 MB 下载
 
 ### 10.2 抽象层验收
 
@@ -1302,3 +1508,234 @@ init(layer: CAMetalLayer) {
 - [ ] 制造 libmpv 失败，能降级到 HLS 转码
 - [ ] 连续 3 次失败后停在 `.failed`，不无限重试
 - [ ] `POST /Sessions/Playing` 的 `PlayMethod` 与实际路径一致
+
+---
+
+## 11. Vendoring 方案（替代 SwiftPM 远程依赖）
+
+### 11.1 为什么放弃 SwiftPM
+
+SwiftPM 拉取 GitHub 依赖时，会调用本机 git 的凭据助手。本机 `~/.gitconfig` 配置为：
+
+```ini
+[credential "https://github.com"]
+	helper =
+	helper = !/opt/homebrew/bin/gh auth git-credential
+```
+
+**注意这个坑**：第一行空 `helper =` 只是清空列表，第二行又把 `gh auth git-credential` 加了回去，所以实际生效的仍是 gh helper。因此「`GIT_CONFIG_COUNT=1` + 空 helper」这种压法**压不住**，仍会触发 macOS 钥匙串弹窗「swift-package 想要使用你储存在钥匙串的 github.com 机密信息」。
+
+该弹窗在本项目已实际打断用户 **3 次**（2026-10-21）。这是**环境问题，不是技术不可行**——MPVKit 本身能用，只是获取方式不适合本机。
+
+**结论：把二进制 vendoring 进仓库，一次性获取后固化。** 收益：
+
+- 零网络、零 git、零钥匙串——构建期完全不触网
+- CI 不需要联网，缓存策略简单
+- 版本完全锁定，上游删 release 也不影响我们
+- 可审计：二进制在仓库里，`strings`/`otool` 随时可查（对应 §8-R8 的 nonfree 复核）
+
+代价：仓库体积显著增大（见 §11.4）。
+
+### 11.2 目录结构
+
+```
+Prism/
+├── ThirdParty/
+│   └── MPVKit/
+│       ├── VERSION                      # 记录来源：1.0.0 / mpv v0.41.0 / FFmpeg n8.1.2
+│       ├── LICENSE-MPVKit-LGPL-3.0.txt
+│       ├── LICENSE-libmpv.txt
+│       ├── LICENSE-FFmpeg-LGPL.txt
+│       ├── Libmpv.xcframework/
+│       ├── Libavcodec.xcframework/
+│       ├── Libavdevice.xcframework/
+│       ├── Libavfilter.xcframework/
+│       ├── Libavformat.xcframework/
+│       ├── Libavutil.xcframework/
+│       ├── Libswresample.xcframework/
+│       ├── Libswscale.xcframework/
+│       ├── Libass.xcframework/
+│       ├── Libfreetype.xcframework/
+│       ├── Libfribidi.xcframework/
+│       ├── Libharfbuzz.xcframework/
+│       ├── Libunibreak.xcframework/
+│       ├── Libbluray.xcframework/
+│       ├── Libuchardet.xcframework/
+│       ├── Libdav1d.xcframework/
+│       ├── Libuavs3d.xcframework/
+│       ├── Libdovi.xcframework/
+│       ├── Libplacebo.xcframework/
+│       ├── Libshaderc_combined.xcframework/
+│       ├── MoltenVK.xcframework/
+│       ├── lcms2.xcframework/
+│       ├── Libcrypto.xcframework/
+│       ├── Libssl.xcframework/
+│       ├── gmp.xcframework/
+│       ├── nettle.xcframework/
+│       ├── hogweed.xcframework/
+│       ├── gnutls.xcframework/
+│       └── Libluajit.xcframework/
+└── Package.swift
+```
+
+**共 29 个 xcframework**（LGPL 分支所需，不含 `Libsmbclient` / 任何 `-GPL` 变体）。
+
+> ⚠️ **不要** vendoring `*-all.zip` 里的内容（`FFmpeg-all.zip`、`libmpv-all.zip` 等汇总包）——那是给手工链接用的裸 `.a` + 头文件，SPM 用不上。只取 `*.xcframework.zip` 解压后的 `.xcframework` 目录。
+
+### 11.3 `Package.swift` 写法
+
+```swift
+// swift-tools-version:6.0
+import PackageDescription
+
+let mpvVendoredFrameworks = [
+    "Libmpv", "Libavcodec", "Libavdevice", "Libavfilter",
+    "Libavformat", "Libavutil", "Libswresample", "Libswscale",
+    "Libass", "Libfreetype", "Libfribidi", "Libharfbuzz", "Libunibreak",
+    "Libbluray", "Libuchardet", "Libdav1d", "Libuavs3d", "Libdovi",
+    "Libplacebo", "Libshaderc_combined", "MoltenVK", "lcms2",
+    "Libcrypto", "Libssl", "gmp", "nettle", "hogweed", "gnutls", "Libluajit",
+]
+
+let package = Package(
+    name: "Prism",
+    platforms: [.macOS(.v15)],
+    products: [
+        .library(name: "PrismPlayback", targets: ["PrismPlayback"]),
+    ],
+    targets: [
+        // 1) 所有 vendored 二进制，全部用 path 引用，零网络
+        .target(
+            name: "PrismMPVBinaries",
+            dependencies: mpvVendoredFrameworks.map {
+                .target(name: $0, condition: .when(platforms: [.macOS]))
+            },
+            path: "Sources/PrismMPVBinaries",
+            linkerSettings: [
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("CoreAudio"),
+                .linkedFramework("AudioToolbox"),
+                .linkedFramework("CoreVideo"),
+                .linkedFramework("CoreMedia"),
+                .linkedFramework("CoreFoundation"),
+                .linkedFramework("Metal"),
+                .linkedFramework("VideoToolbox"),
+                .linkedFramework("Cocoa"),
+                .linkedFramework("IOKit"),
+                .linkedFramework("QuartzCore"),
+                .linkedFramework("OpenGL"),
+                .linkedFramework("CoreGraphics"),
+                .linkedLibrary("bz2"),
+                .linkedLibrary("iconv"),
+                .linkedLibrary("expat"),
+                .linkedLibrary("resolv"),
+                .linkedLibrary("xml2"),
+                .linkedLibrary("z"),
+                .linkedLibrary("c++"),
+            ]
+        ),
+
+        // 2) 播放抽象层：不含任何 Libmpv import
+        .target(name: "PrismPlayback", path: "Sources/PrismPlayback"),
+
+        // 3) libmpv 实现：唯一允许 import Libmpv 的地方
+        .target(
+            name: "PrismPlaybackMPV",
+            dependencies: ["PrismPlayback", "PrismMPVBinaries"],
+            path: "Sources/PrismPlaybackMPV"
+        ),
+    ]
+        // 4) 逐个 binaryTarget(path:) —— 用循环生成，避免 29 段重复
+        + mpvVendoredFrameworks.map { name in
+            .binaryTarget(
+                name: name,
+                path: "ThirdParty/MPVKit/\(name).xcframework"
+            )
+        }
+)
+```
+
+> **说明**：`binaryTarget` 不能写在 `targets:` 数组内部的条件表达式里，所以上面用「数组拼接」的形式把它们追加到 `targets`。`binaryTarget(path:)` 的 `path` 是**相对 `Package.swift` 所在目录**的路径，指向 `.xcframework` 目录本身（不是 zip）。
+
+**关键点：**
+- `binaryTarget(path:)` **完全不走网络**，SwiftPM 只做本地校验（读 `Info.plist`）。
+- 不再需要 `checksum`（那是 `binaryTarget(url:)` 才要的）。
+- 首次 `swift build` 不再下载任何东西，只解压/校验本地文件。
+
+### 11.4 Git LFS vs 直接提交
+
+| 维度 | 直接提交（普通 git） | Git LFS |
+|---|---|---|
+| 仓库体积 | 每个 clone 拉全量 **~700 MB–1.3 GB** | clone 只拉指针，按需拉二进制 |
+| 首次 clone 速度 | 慢（取决于网络） | 快（但 `lfs pull` 后仍要下） |
+| CI 配置 | 零配置 | 需要 `git lfs install` + `lfs: true`（actions/checkout） |
+| GitHub 限制 | 单文件 >100 MB 会被拒（**需确认：`.xcframework` 内单个二进制最大 15.7 MB，未超限**） | 免费额度 1 GB 存储 / 1 GB 月流量，**可能超** |
+| 离线开发 | ✅ 天然支持 | 🟡 需要先 `lfs pull` |
+| 可审计性 | ✅ 二进制在仓库里，`strings` 直接可查 | 🟡 需要 `lfs pull` 后才能查 |
+
+**建议：直接提交（普通 git），不用 LFS。** 理由：
+
+1. 我们的场景是**小团队 + 单一平台（macOS arm64）**，不是开源大项目。700 MB 的一次性 clone 成本可以接受。
+2. **离线优先**：vendoring 的核心价值就是「不触网」。用 LFS 等于把网络依赖又加回来了（LFS 服务器也可能是 GitHub）。
+3. **可审计性对我们更重要**：§8-R8 要求每次升级后 `strings | grep nonfree`。二进制直接在仓库里，任何人 clone 完就能查。
+4. GitHub 的 100 MB 单文件限制**不会触发**（最大的 `Libshaderc_combined` arm64 slice 是 15.7 MB）。
+
+> ⚠️ **但仓库体积会显著变大**。若团队无法接受，退化方案是：**只 vendoring macOS arm64 单切片**——用 `lipo -thin arm64` + `xcframework` 重建，可把 1.3 GB 降到约 270 MB（29 个框架的 arm64 slice 之和 67.6 MB × 各平台副本，实际以实测为准）。代价是放弃 Intel Mac 支持——**这与「部署目标 macOS 15+」并不冲突，但要产品明确是否放弃 Intel**。
+
+### 11.5 获取与固化步骤（一次性，由有网络的环境执行）
+
+> 这一步**只需要做一次**，且**不要在本机代理会话里做**（会触发网络/凭据问题）。建议由用户或有网络的环境执行，产物直接 commit。
+
+```bash
+# 1) 建目录
+mkdir -p ThirdParty/MPVKit && cd ThirdParty/MPVKit
+
+# 2) 从 1.0.0 release 下载 29 个 xcframework
+BASE=https://github.com/mpvkit/MPVKit/releases/download/1.0.0
+for n in Libmpv Libavcodec Libavdevice Libavfilter Libavformat Libavutil Libswresample Libswscale; do
+  curl -LO "$BASE/$n.xcframework.zip"
+done
+# 其余 21 个来自各自 build 仓库（openssl-build / gnutls-build / libass-build /
+# libbluray-build / moltenvk-build / libshaderc-build / lcms2-build /
+# libplacebo-build / libdovi-build / libdav1d-build / libuavs3d-build /
+# libuchardet-build / libluajit-build），版本号见 §2.1.1 与 Package.swift 原文
+
+# 3) 解压（每个 zip 解出来就是一个 .xcframework 目录）
+for z in *.zip; do unzip -q "$z"; done && rm *.zip
+
+# 4) 许可证合规复核（必须做，见 §8-R8）
+strings Libavcodec.xcframework/macos-arm64_x86_64/Libavcodec.framework/Versions/A/Libavcodec \
+  | grep -iE "nonfree|unredistributable"
+# 期望：无输出。若出现 "nonfree and unredistributable" → 该版本不可用，换版本
+
+# 5) 记录版本来源
+cat > VERSION <<'EOF'
+MPVKit 1.0.0 (2026-07-25, non-prerelease)
+  mpv       v0.41.0
+  FFmpeg    n8.1.2
+  libplacebo 7.360.1
+  MoltenVK  1.4.2
+  libass    0.17.5
+Source: https://github.com/mpvkit/MPVKit/releases/tag/1.0.0
+EOF
+```
+
+### 11.6 升级流程
+
+升级 MPVKit 时**必须**走完这套，缺一不可：
+
+1. 改 `VERSION` 文件里的版本号与上游 release URL。
+2. 重新下载 + 解压，覆盖 `ThirdParty/MPVKit/`。
+3. **`strings | grep nonfree` 复核**（§8-R8）——这是历史踩过的坑。
+4. 检查 `Package.swift` 的 target 清单是否变化（上游可能新增/删除依赖，如新增 `Libsmbclient`）。
+5. 跑一遍 §7.6 渲染验证清单。
+6. 更新本文档 §2.1 的事实表。
+
+### 11.7 这个方案不解决什么
+
+诚实说明边界：
+
+- **不解决许可证问题**。vendoring 只是改变了「二进制怎么来」，LGPL-3.0 静态链接的 4d0 义务（§3.3）依然存在。详见 `docs/DECISION-mpv-license.md`。
+- **不解决维护风险**。上游停更时，vendoring 反而让我们更难跟进（需要自己重新构建）。§8-R2 的「自建构建脚本」预案仍然需要。
+- **不解决渲染未验证**。§7.6 的清单仍然是必须做的。
+- **仓库体积代价真实存在**。若团队不接受 700 MB–1.3 GB，需要回到 §11.4 的单切片方案或 LFS。

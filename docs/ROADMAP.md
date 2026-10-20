@@ -20,23 +20,39 @@
 | 决策项 | 结论 | 理由 |
 |---|---|---|
 | 语言/框架 | Swift 6 + SwiftUI，AppKit 仅用于播放器视图嵌入与窗口细节 | 原生体验、Swift 6 严格并发保证多代理协作质量 |
-| 最低系统 | macOS 15 Sequoia（`MACOSX_DEPLOYMENT_TARGET = 15.0`） | 覆盖面与现代 API 的平衡点 |
-| 播放内核 | **纯 libmpv（MPVKit / SPM）** | 格式覆盖最全：MKV/HEVC/DTS/TrueHD/ASS/PGS 一次到位，行为与 Emby 转码解耦 |
-| 分发 | 直接下载 + Developer ID 签名 + notarytool 公证 + DMG + Sparkle 2 | 避开 App Store 沙盒与 GPL 组件的合规摩擦 |
+| 最低系统 | macOS 15 Sequoia（`MACOSX_DEPLOYMENT_TARGET = 15.0`） | 覆盖面与现代 API 的平衡点；AetherEngine 7.x 亦要求 macOS 15 |
+| 播放内核 | **AetherEngine 7.44.0**（纯 Swift 源码包，LGPL-3.0 + App Store 例外） | 原生 PiP/AirPlay/杜比视界/Atmos，纯 Swift 无 C 指针隔离层 |
+| 分发 | 直接下载 + Developer ID 签名 + notarytool 公证 + DMG + Sparkle 2 | 避开 App Store 沙盒摩擦，保留完整播放能力 |
+| **开源许可** | **GPL-3.0-only** | 用户已确认；与 LGPL 依赖完全兼容，且自动满足 LGPL §4(d)(0) 的重链接义务 |
 | 工程组织 | 薄 App target + 根 SPM 包多 target，XcodeGen 生成工程 | 多代理并行时**零 pbxproj 冲突** |
 | 数据层 | URLSession + async/await；GRDB 做元数据/进度缓存；Nuke 做图片缓存 | 成熟、可测、低维护 |
 | 状态管理 | `@Observable` + `@MainActor` ViewModel；跨模块事件用 AsyncStream | 贴合 SwiftUI，避免第三方架构依赖 |
 
-### 纯 libmpv 路线的已知代价（已接受）
-- 系统画中画（PiP）与 AirPlay 不可直接用 → v1.0 先做「置顶迷你播放窗 + 系统级屏幕镜像」；v1.1 再评估 `AVSampleBufferDisplayLayer` 自研 PiP。
-- Now Playing / 媒体键 / 睡眠防休眠需自实现 → 用 `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` + `IOPMAssertion`，与引擎解耦，成本可控。
-- 公证时需对嵌入的 dylib 逐个签名并设置 hardened runtime 例外 → 在 M5 发布任务里单列。
+### 播放内核选型历程（决策留痕）
 
-### MPVKit 依赖核实结论（2026-10-21 主管验证）
-- 仓库 `mpvkit/MPVKit`，最新 release `1.1.0-n9.0.2`（2026-10-07），`swift-tools-version:5.9`，`platforms: [.macOS(.v12)]` ✅
-- 提供两个产品：`MPVKit`（**LGPL-3.0**，动态链接即可闭源分发）与 `MPVKit-GPL`（GPL，含 libsmbclient）。
-- **本项目使用 LGPL 版 `MPVKit`**：Emby 走 HTTP/HTTPS，不需要 SMB；LGPL 下我们只需动态链接 + 提供库源码链接，App 本体可闭源。
-- 依赖已内置 libass / libplacebo / MoltenVK / libdav1d / gnutls，ASS 字幕与 HDR tone-mapping 开箱可用。
+1. **v0.1 决策**：纯 AVPlayer + 服务端转码 → 被否，MKV/ASS/DTS 覆盖不足。
+2. **v0.2 决策**：纯 libmpv（MPVKit）→ 用户确认。但核查发现两个问题：
+   - MPVKit 的 `Libmpv.xcframework` 实为**静态库**（`default_library = 'static'`），
+     而 LGPL-3.0 §4(d)(1) 要求动态链接才可免除重链接义务 → 只能走 §4(d)(0)（分发目标文件）；
+   - README 自述「only suitable for learning libmpv and will not be maintained too frequently」。
+3. **v0.3 决策（当前）**：改用 **AetherEngine**。理由：
+   - 提供 **MPVKit 无法弥补的系统能力**：原生 PiP、AirPlay、Dolby Vision 直通、Dolby Atmos 直通、Now Playing；
+   - **纯 Swift 源码包**（非 binaryTarget），无 `OpaquePointer` 隔离层，与 Swift 6 严格并发天然兼容；
+   - 维护活跃（7.44.0 发布于 2026-10-20），已有 Jellyfin 客户端（Sodalite）等 16 个落地案例；
+   - 项目开源后 LGPL 重链接义务自动满足，许可证不再是约束。
+4. **MPVKit 保留为 Plan B**：`PlaybackEngine` 协议隔离了引擎实现，
+   若 AetherEngine 出现阻塞性问题，切换成本被限制在 `PrismPlayback` 一个模块内。
+
+详见 [DECISION-002-engine-and-license.md](DECISION-002-engine-and-license.md)；libmpv 时期的分析见
+[DECISION-mpv-license.md](DECISION-mpv-license.md)（保留作历史记录）。
+
+### AetherEngine 的主要风险（已接受）
+
+- **单人维护**：265 星，作者 Vincent Herbst → 缓解：锁定 `7.44.0` 精确版本，不跟随 latest；LGPL 允许随时 fork。
+- **7.x 刚抬升平台门槛**（原 iOS 16/macOS 14）→ 我们本来就用 macOS 15，无影响。
+- **依赖链较长**（FFmpegBuild / LibDovi / LibTrueHD 等）→ 全部锁定精确版本。
+- **体积未实测** → M3 首个集成任务必须实测 .app 增量。
+- **XcodeGen 不支持 SPM traits**（2.45.4 会静默丢弃 `traits:`）→ 我们默认全关 traits，不受影响。
 
 ---
 
@@ -141,7 +157,7 @@ Prism/
 | T1.5 | 设计系统：色板/字阶/圆角/间距/动效 + 海报卡/骨架屏/空态组件 | design-system | T0.1 | 组件预览可用 | `Sources/PrismUI/DesignSystem` |
 | T1.6 | 应用外壳：NavigationSplitView 侧边栏、工具栏、多服务器切换位 | app-shell | T1.5 | 空数据下导航可点 | `Sources/PrismUI/AppShell` |
 | T1.7 | Keychain + 会话持久化 + 启动恢复 | session-store | T1.2 | 重启免登录；401 自动登出 | `Sources/PrismData/Session` |
-| T1.8 | MPVKit 集成 spike：SPM 引入、渲染到 NSView、ASS 字幕、切音轨 | mpv-spike | T0.1 | Demo 能播 MKV 并切字幕 | `Sources/PrismPlayback/Spike` |
+| T1.8 | AetherEngine 集成验证：SPM 引入、`AetherPlayerSurface` 渲染、ASS 字幕、切音轨、体积实测 | engine-spike | T0.1 | 能播 MKV 并切字幕；记录 .app 体积增量 | `Sources/PrismPlayback/Spike` |
 
 ### Wave 2 — 连接与浏览（M1→M2）
 
@@ -158,11 +174,11 @@ Prism/
 
 | ID | 任务 | 代理 | 依赖 | 验收 | 目录 |
 |---|---|---|---|---|---|
-| T3.1 | `MPVEngine`：播放/暂停/seek/倍速/音量/事件流/渲染层 | mpv-engine | T1.8 | 长片 seek 精准 ±0.5s | `Sources/PrismPlayback/Engine` |
+| T3.1 | `AetherEngineAdapter`：实现 `PlaybackEngine` 协议，桥接 Combine → AsyncStream | engine-adapter | T1.8 | 协议全部方法可用，长片 seek 精准 ±0.5s | `Sources/PrismPlayback/Engine` |
 | T3.2 | 协商：DeviceProfile、PlaybackInfo、直连/转码选路、失败降级 | playback-negotiation | T1.3,T3.1 | 三种播放方式都能出画面 | `Sources/PrismPlayback/Negotiation` |
 | T3.3 | 播放器 UI：控制条、进度悬停预览、音轨/字幕菜单、全屏、自动隐藏 | player-ui | T3.1,T1.5 | 键鼠全流程无死角 | `Sources/PrismUI/Player` |
 | T3.4 | 进度上报与续播：Playing/Progress/Stopped、90% 完播判定 | progress-sync | T3.1,T1.3 | 退出重进误差 <10s | `Sources/PrismPlayback/Progress` |
-| T3.5 | Now Playing + 媒体键 + 防休眠 + 迷你置顶窗 | now-playing | T3.1 | 控制中心显示元数据与进度 | `Sources/PrismPlayback/System` |
+| T3.5 | 系统能力接线：Now Playing、媒体键、防休眠、PiP、AirPlay（AetherEngine 原生支持） | system-integration | T3.1 | 控制中心显示元数据与进度；PiP/投送可用 | `Sources/PrismPlayback/System` |
 | T3.6 | 字幕：内嵌/外挂、ASS 样式、延迟、字体、位置 | subtitles | T3.1 | ASS 特效正常，延迟可调 | `Sources/PrismPlayback/Subtitles` |
 
 ### Wave 4 — 打磨（M4）
