@@ -132,7 +132,7 @@ public struct ErrorStateView: View {
                 }
             }
         }
-        .help(Text(verbatim: error.debugDescription))
+        .help(showsTechnicalDetail ? Text(verbatim: error.debugDescription) : Text(""))
     }
 
     /// 按错误类型选图标（全部是长期存在的 SF Symbol，避免系统版本差异）。

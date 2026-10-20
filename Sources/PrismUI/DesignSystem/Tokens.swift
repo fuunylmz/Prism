@@ -48,20 +48,25 @@ public enum Radius {
 ///
 /// 全部走 **Dynamic Type 语义字体**（`.largeTitle` / `.title2` / `.headline` …），
 /// 而不是写死 `size:`：这样系统「辅助功能 › 显示 › 文字大小」与放大镜才能生效。
-/// 具体字号参考 `docs/research/ux-benchmark.md` §5.3 的字体表，但以语义字号为准。
+///
+/// 具体字号参考 `docs/research/ux-benchmark.md` §5.3 的字体表，但**以语义字号为准**。
+/// 注意 UX 文档那张表用的是 iOS 字号；macOS 的语义字号更小（实测 `NSFont.preferredFont`）：
+/// `largeTitle` 26 / `title` 22 / `title2` 17 / `title3` 15 / `headline` 13（Semibold）/
+/// `body` 13 / `callout` 12 / `subheadline` 11 / `footnote` 10 / `caption` 10。
+/// 因此本文件里「22pt Semibold」之类的注释是**设计意图**，macOS 实际渲染为语义字号对应值。
 public enum Typography {
-    /// 大标题（34pt Bold 量级）：欢迎页、整页空态主标题。
+    /// 大标题：欢迎页、整页空态主标题（macOS 26pt Bold）。
     public static let titleLarge: Font = .system(.largeTitle, design: .default, weight: .bold)
-    /// 页标题（22pt Semibold 量级）：库名、详情页标题。
+    /// 页标题：库名、详情页标题（macOS 17pt Semibold）。
     public static let title: Font = .system(.title2, design: .default, weight: .semibold)
-    /// 卡片标题 / 按钮文字（17pt Semibold 量级）。
+    /// 卡片标题 / 按钮文字（macOS 13pt Semibold）。
     public static let headline: Font = .headline
-    /// 正文（17pt Regular 量级）。
+    /// 正文：简介、设置项（macOS 13pt Regular）。
     public static let body: Font = .body
-    /// 说明文字 / 角标（11–13pt 量级）。
+    /// 说明文字 / 角标（macOS 10pt）。
     public static let caption: Font = .caption
-    /// 时间码：等宽设计 + 等宽数字，避免播放器计时跳动。
-    public static let monoTime: Font = .system(.footnote, design: .monospaced, weight: .medium).monospacedDigit()
+    /// 时间码：等宽设计 + 等宽数字，避免播放器计时跳动（macOS 13pt Medium）。
+    public static let monoTime: Font = .system(.body, design: .monospaced, weight: .medium).monospacedDigit()
 }
 
 // MARK: - 颜色

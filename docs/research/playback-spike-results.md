@@ -14,7 +14,7 @@
 | 3 | 音轨切换 | **未达预期**。切换会触发 `.loading` 重建，且 `clock.sourceTime` 瞬时归零 ~86ms | ⚠️ 需产品决策 |
 | 4 | PiP 在 macOS 可用性 | **可用**。`isPictureInPictureSupported() == true`，`isPossible` 0.2s 后转 true | ✅ 成功 |
 | 5 | AirPlay 在 macOS 可用性 | **部分可用**。`allowsExternalPlayback == true`，`AVRoutePickerView` 可构造；实际投送无法验证 | ⚠️ 部分无法验证 |
-| 6 | Swift 6 严格并发 | **通过**。全依赖图 0 warning / 0 error，公开 API 无 `OpaquePointer` | ✅ 成功 |
+| 6 | Swift 6 严格并发 | **通过**。Prism 侧 0 warning；AetherEngine 内部因 `-suppress-warnings` 无法判断 | ✅ 成功（有限定） |
 | 7 | 体积实测 | **已实测**。arm64 框架 10.65 MB + 可执行 10.66 MB；压缩后 ~8.1 MB | ✅ 成功 |
 
 ### 三条最需要注意的结论
@@ -593,15 +593,17 @@ the current isolation context and concurrent execution of the closure
 error: Build failed
 ```
 
-→ **严格并发检查确实开启**，前面的"0 warning"是真实的。该文件已删除。
+→ **严格并发检查确实开启**，且这个错误来自 `SpikeKit`（我的 target，未被 suppress），证明我这边报告的"0 warning"不是假象。该文件已删除。
 
 ### 重点检查项
 
+下表说的"无诊断"都指 **Prism 侧调用代码**（未被 suppress）：
+
 | 关注点 | 结果 |
 |--------|------|
-| `@Published` 的 Combine 桥接 | ✅ 无诊断。`sink` 闭包在 Swift 6 下需用 `@unchecked Sendable` 容器持有（spike 里用 `NSLock` 包装），引擎侧本身干净 |
-| `AVMetadataItem` 传递 | ✅ 无诊断 |
-| **`OpaquePointer`** | ✅ **公开 API 中出现 0 次**（`grep` 统计 `public` 相关行 = 0） |
+| `@Published` 的 Combine 桥接 | ✅ 我的 target 无诊断。注意 `sink` 闭包在 Swift 6 下**不能**直接捕获 `@MainActor` 局部变量，需用 `@unchecked Sendable` 容器（spike 里用 `NSLock` 包装） |
+| `AVMetadataItem` 传递 | ✅ 我的 target 无诊断（`AVMetadataItem` 本身是 `@unchecked Sendable`） |
+| **`OpaquePointer`** | ✅ **公开 API 中出现 0 次**（`grep` 统计含 `public` 的行 = 0） |
 
 `OpaquePointer` 确实存在于引擎内部（FFmpeg 的 `AVIOContext`/`SwsContext` 等，如 `Video/MP4SegmentMuxer.swift:619`、`Decoder/SoftwareVideoDecoder.swift:15`），但**全部是 internal，未泄漏到公开 API**。这与任务预期的"应该没有"一致。
 
@@ -771,4 +773,5 @@ swift build --disable-sandbox --cache-path "$PWD/.build/cache"
 | 3 | 音轨切换触发 `.loading`（143ms）+ 时钟归零（86ms） | 进度条会闪 0，有短暂黑帧风险 | UI 在 `.loading` 期间冻结进度显示；需产品决策 |
 | 4 | 未验证 PiP 窗口真正弹出 | 无法确认 PiP 内画面是否正常 | 需 GUI 环境手工验证 |
 | 5 | 未验证 AirPlay 实际投送 | 无法确认投送链路是否通 | 需真机 Apple TV 验证 |
+| 6 | AetherEngine 内部 warning 被 `-suppress-warnings` 吞掉 | 无法断言引擎内部零并发警告 | 在 checkout 里单独 `swift build`（不带依赖 suppress）补测 |
 | 7 | DMG 未实际创建（沙箱限制） | 体积为 zip/tar.gz 实测的等价估算 | 非沙箱环境补测 |

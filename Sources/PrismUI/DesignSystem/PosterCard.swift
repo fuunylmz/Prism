@@ -115,6 +115,10 @@ public struct PosterCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+        // 语义见 `docs/research/ux-benchmark.md` §S05：单击选中、双击播放。
+        // 双击手势必须注册在单击**之前**；且只有提供 `onPlay` 时才挂载，
+        // 否则不可播放的卡片（文件夹、合集）每次单击都要等双击判定超时。
+        .modifier(DoubleTapToPlay(isEnabled: onPlay != nil, action: { onPlay?() }))
         .onTapGesture {
             onSelect?()
         }
@@ -348,6 +352,24 @@ public struct PosterCard: View {
 
     private var hoverScale: CGFloat {
         isHovering && !reduceMotion ? 1.03 : 1.0
+    }
+}
+
+// MARK: - 双击播放
+
+/// 条件挂载的双击手势。
+///
+/// `isEnabled == false` 时完全不挂载，避免单击选中被双击判定延迟。
+private struct DoubleTapToPlay: ViewModifier {
+    let isEnabled: Bool
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.onTapGesture(count: 2, perform: action)
+        } else {
+            content
+        }
     }
 }
 

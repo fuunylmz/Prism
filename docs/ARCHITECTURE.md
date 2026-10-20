@@ -376,6 +376,56 @@ AetherEngine 7.x 要求：**macOS 15+ / Swift 6.4 / Xcode 27.0+ / 至少 macOS 2
 最后一条来自 `VTRegisterSupplementalVideoDecoderIfAvailable`（iOS/tvOS 26.2 API，需在编译期存在）。
 本机 Xcode 27.1 满足；**CI 镜像必须跟上，否则无法构建**。
 
+### 3.5 实测行为（T1.8 spike，2026-10-21，macOS 27.0 / arm64）
+
+完整报告见 [research/playback-spike-results.md](research/playback-spike-results.md)。以下是**必须在实现中处理**的结论：
+
+#### ✅ 已通过
+
+| 项 | 实测值 |
+|---|---|
+| MKV 起播 | **92 ms**（`load()` 返回 87ms 后 `playing`） |
+| seek 精度 | 播放中与暂停中均 **误差 0.000s** |
+| 视频路径 | `videoRoute=loopback backend=native`（MKV 走 demuxer → 本地 HLS-fMP4 → AVPlayer） |
+| 离屏渲染 | `bind(view:)` 给离屏 `NSView` 即可，`load` 不要求上屏 |
+| PiP | `isPictureInPictureSupported()=true`，**无需窗口**，`isPossible` 在 0.2s 后为 true |
+| Swift 6 | Prism 侧 4 个 target **0 warning**，负向对照证明严格并发检查生效 |
+| 体积 | .app 未压缩 **21.5 MB**，压缩后 **~8.1 MB**（zip/tar 双工具互证） |
+
+#### ⚠️ 必须在适配层处理的三个坑
+
+**坑 1：`duration` 在 `load()` 返回瞬间是 0**
+实测 `load()` 返回时 `player.duration == 0`，**61ms 后**才变成真实值。
+→ UI 若在 `load` 返回后立刻读 `duration`，进度条会闪 `00:00`。
+**处理**：观察 `player.$duration`，或等首个 `.playing` 事件后再显示时长。
+
+**坑 2：切音轨会触发 143ms 重建，且 `sourceTime` 归零约 86ms**
+实测 `selectAudioTrack` 后 `$state` 走一次 `.loading`（143ms），同时
+`clock.sourceTime` 出现 `9.073 → 0.000（约 86ms）→ 9.072` 的跳变。
+→ 若进度条直绑 `sourceTime`，**切音轨会闪一下 0**。
+**处理**：`.loading` 期间冻结进度显示（保留最后一次有效值），不要直绑。
+
+**坑 3：ASS 覆盖标签只支持一部分**
+源码 `Subtitles/SubtitleRectText.swift` 明确列出支持集：
+`\c` / `\1c`（BGR）/ `\b` / `\i` / `\u` / `\s` / `\fn` / `\fs` / `\r` / `\an` / `\pos` / `\N` / `\n` / `\h`。
+**明确不支持**（源码注释原文「left alone」）：`\fad`（淡入淡出）、`\bord`（描边）、`\shad`（阴影）、`\fscx` / `\fsc`（缩放）、`\fsp`（字距）、`\iclip`。
+实测确认：`\pos(960,120)` → `(0.5, 0.1111)` 精确、`\an7` → alignment 7、`\c&H0000FF&` → `#FF0000`（BGR→RGB 正确）、`\b1` → bold。
+**但 `\fad` 被完全丢弃，样式级 `Alignment` 也不映射到 placement**（只有行内 `\an`/`\pos` 生效）。
+
+→ **对字幕 UI 的影响**：简单字幕（SRT/基本 ASS）够用；**带特效的动漫 ASS 会丢失淡入淡出与描边**。这是选型已知代价，v1.0 接受；若后续成为问题，可在自绘层补渲染。
+
+**坑 4：`setSoftwareSubtitleDelay` 不影响 `$subtitleCues`**
+该 API **只作用于 software PiP 合成路径**。Prism 自绘字幕时，
+**必须自己对 `clock.sourceTime` 施加偏移**，不能依赖引擎。
+
+#### 命令行工具特别注意
+
+`AetherEngine` 是 `@MainActor`。Swift 的 `async main` 走 `dispatch_main()`，
+**只排空主队列、不跑 CFRunLoop**，AVPlayer 的 periodic observer 永不触发 →
+`clock.sourceTime` 永远停在 0，看起来像「播放没起来」。
+命令行工具必须用 `RunLoop.main.run(until:)` 泵主线程。
+（GUI App 无此问题，但写诊断工具时会踩。）
+
 ---
 
 ## 4. PrismData
