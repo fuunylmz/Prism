@@ -250,8 +250,12 @@ private struct ContentColumnView: View {
             }
         case .downloads:
             DownloadsPlaceholderView()
-        case let .settings(tab):
-            SettingsPlaceholderView(tab: tab)
+        case .settings:
+            SettingsView(
+                selection: $model.settingsTab,
+                server: session?.server,
+                isDemo: session?.isDemo ?? false
+            )
         case .detail:
             // 详情属于详情栏，内容栏不应出现该路由；保底给空态。
             DetailEmptyView()

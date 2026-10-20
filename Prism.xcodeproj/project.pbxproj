@@ -9,12 +9,15 @@
 /* Begin PBXBuildFile section */
 		5EA917AF5480F8C34E794B7E /* PrismUI in Frameworks */ = {isa = PBXBuildFile; productRef = B976749A77C96896987B962D /* PrismUI */; };
 		C6F007D55BBA410ABB9E2DF1 /* PrismApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4115D7B498B51A37C0C1059 /* PrismApp.swift */; };
+		D509BA095B76A9A8C073A2B9 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = AAA2110827842E8982955A65 /* Localizable.strings */; };
 		E72183EE09D6643B45C7A504 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 20325D4A56CE1D2FAD548CC0 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		20325D4A56CE1D2FAD548CC0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		34E5859934B2378179D8CA7A /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		3CBECDC40DB2F7D8BF88B956 /* Prism.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Prism.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		61055B9A77158F7EB30F62FB /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		885097CD299912788ABB8C7C /* Prism */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Prism; path = .; sourceTree = SOURCE_ROOT; };
 		C4115D7B498B51A37C0C1059 /* PrismApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrismApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -43,6 +46,7 @@
 		5D028E93F161D106196F922F /* App */ = {
 			isa = PBXGroup;
 			children = (
+				AAA2110827842E8982955A65 /* Localizable.strings */,
 				20325D4A56CE1D2FAD548CC0 /* Assets.xcassets */,
 				C4115D7B498B51A37C0C1059 /* PrismApp.swift */,
 			);
@@ -108,6 +112,7 @@
 			knownRegions = (
 				Base,
 				en,
+				"zh-Hans",
 			);
 			mainGroup = 081163646A4A620D92B0DCA2;
 			minimizedProjectReferenceProxies = 1;
@@ -130,6 +135,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E72183EE09D6643B45C7A504 /* Assets.xcassets in Resources */,
+				D509BA095B76A9A8C073A2B9 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -145,6 +151,18 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXVariantGroup section */
+		AAA2110827842E8982955A65 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				34E5859934B2378179D8CA7A /* en */,
+				61055B9A77158F7EB30F62FB /* zh-Hans */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
 		4E8AB6C50D8E6B5B2BBD9220 /* Release */ = {

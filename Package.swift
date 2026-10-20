@@ -60,6 +60,7 @@ let package = Package(
     targets: [
         .target(
             name: "PrismCore",
+            resources: [.process("Resources")],
             swiftSettings: sharedSwiftSettings
         ),
         .target(

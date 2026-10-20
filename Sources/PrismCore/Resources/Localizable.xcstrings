@@ -1,0 +1,204 @@
+{
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "error.cancelled": {
+      "comment": "EmbyError.cancelled",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The operation was cancelled."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "操作已取消。"
+          }
+        }
+      }
+    },
+    "error.decoding": {
+      "comment": "EmbyError.decoding",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server returned data that could not be read."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务器返回了无法识别的数据。"
+          }
+        }
+      }
+    },
+    "error.forbidden": {
+      "comment": "EmbyError.forbidden",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You do not have permission to access this content."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有权限访问该内容。"
+          }
+        }
+      }
+    },
+    "error.invalidURL": {
+      "comment": "EmbyError.invalidURL",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server address is invalid."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务器地址无效。"
+          }
+        }
+      }
+    },
+    "error.notFound": {
+      "comment": "EmbyError.notFound",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The requested content could not be found."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "找不到请求的内容。"
+          }
+        }
+      }
+    },
+    "error.server": {
+      "comment": "参数：HTTP 状态码",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server reported an error (%lld)."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务器出错了（%lld）。"
+          }
+        }
+      }
+    },
+    "error.server.withMessage": {
+      "comment": "参数 1：HTTP 状态码，参数 2：服务端消息",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server reported an error (%1$lld): %2$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务器出错了（%1$lld）：%2$@"
+          }
+        }
+      }
+    },
+    "error.serverUnreachable": {
+      "comment": "参数：底层网络错误描述",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to reach the server: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法连接到服务器：%@"
+          }
+        }
+      }
+    },
+    "error.timeout": {
+      "comment": "EmbyError.timeout",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The connection timed out. Please try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接超时，请检查网络后重试。"
+          }
+        }
+      }
+    },
+    "error.unauthorized": {
+      "comment": "EmbyError.unauthorized",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your session has expired. Please sign in again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录已失效，请重新登录。"
+          }
+        }
+      }
+    },
+    "error.unknown": {
+      "comment": "EmbyError.unknown",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An unknown error occurred."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发生未知错误。"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}
