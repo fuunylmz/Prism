@@ -1,4 +1,5 @@
 import SwiftUI
+import PrismCore
 
 // MARK: - 根外壳
 
@@ -50,6 +51,12 @@ public struct RootShell: View {
         AppShellView(model: model, session: session)
             .prismTheme(theme)
             .posterImageLoader(imageLoader)
+            // 语言切换：`AppSettings.language` 选中文/英文时改写 SwiftUI 的 locale，
+            // 于是所有 `Text("中文原文")` 都会去查对应语言的 Localizable.strings。
+            // `.id` 强制重建视图树——SwiftUI 的 `LocalizedStringKey` 在视图首次
+            // 构建时求值，不重建的话已显示的文本不会跟着变。
+            .environment(\.locale, AppSettings.shared.language.locale ?? .autoupdatingCurrent)
+            .id(AppSettings.shared.language)
             .focusedSceneValue(\.navigationModel, model)
     }
 
