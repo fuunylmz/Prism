@@ -13,12 +13,15 @@ PrismApp (App/)
          ├── PrismCore
          ├── EmbyAPI ──→ PrismCore
          ├── PrismData ─→ PrismCore, EmbyAPI
-         └── PrismPlayback → PrismCore
+         └── PrismPlayback → PrismCore, EmbyAPI
 ```
 
 **铁律**
-- 依赖只能向下，禁止反向或环状。`PrismPlayback` 不得 import `EmbyAPI`（播放地址由上层传入）。
-- `PrismUI` 之外的模块不得 import SwiftUI（`PrismPlayback` 只暴露 `NSView`）。
+- 依赖只能向下，禁止反向或环状。
+- `PrismPlayback` **依赖 EmbyAPI**（协商层要用 `DeviceProfile` / `PlaybackInfoResponse`），
+  但**不得**依赖 `PrismUI` / `PrismData`。
+- `PrismUI` 之外的模块不得 import SwiftUI（`PrismPlayback` 只通过 `PlaybackEngine.renderView`
+  暴露一个 `AnyView`，且该属性由 UI 侧消费）。
 - 所有跨模块传值类型必须 `Sendable`。
 
 ---

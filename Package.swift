@@ -76,6 +76,10 @@ let package = Package(
             name: "PrismPlayback",
             dependencies: [
                 "PrismCore",
+                // 协商层要用 `DeviceProfile` / `PlaybackInfoResponse`，
+                // 这两个类型在 EmbyAPI 里，所以播放层需要它。
+                // 分层仍是自上而下：EmbyAPI → PrismCore，PrismPlayback → EmbyAPI。
+                "EmbyAPI",
                 .product(name: "AetherEngine", package: "AetherEngine")
             ],
             swiftSettings: sharedSwiftSettings
@@ -106,7 +110,7 @@ let package = Package(
         ),
         .testTarget(
             name: "PrismPlaybackTests",
-            dependencies: ["PrismPlayback", "PrismCore"],
+            dependencies: ["PrismPlayback", "PrismCore", "EmbyAPI"],
             swiftSettings: sharedSwiftSettings
         )
     ],
