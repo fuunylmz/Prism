@@ -110,11 +110,9 @@ public struct PlaybackNegotiator: Sendable {
         if let errorCode = info.errorCode {
             throw NegotiationError.notPlayable(errorCode)
         }
-        guard !info.mediaSources.isEmpty else {
+        guard let source = selectSource(from: info.mediaSources) else {
             throw NegotiationError.noMediaSources(itemId: item.id)
         }
-
-        let source = selectSource(from: info.mediaSources)
         let position = startPosition < .zero ? Ticks(0) : startPosition
 
         let audioStream = resolveAudioStream(in: source, requested: audioStreamIndex)
@@ -165,13 +163,13 @@ extension PlaybackNegotiator {
     /// 多版本 UI 属于后续工单。
     ///
     /// - Parameter sources: `PlaybackInfoResponse.MediaSources`。
-    /// - Returns: 选中的媒体源。
-    func selectSource(from sources: [MediaSource]) -> MediaSource {
+    /// - Returns: 选中的媒体源；列表为空时返回 `nil`（调用方据此抛
+    ///   ``NegotiationError/noMediaSources(itemId:)``）。
+    func selectSource(from sources: [MediaSource]) -> MediaSource? {
         if settings.preferDirectPlay, let directPlayable = sources.first(where: \.supportsDirectPlay) {
             return directPlayable
         }
-        // 调用方保证 sources 非空（`negotiate` 已提前 guard）。
-        return sources[0]
+        return sources.first
     }
 }
 

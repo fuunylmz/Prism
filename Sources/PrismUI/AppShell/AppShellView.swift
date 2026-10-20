@@ -26,6 +26,9 @@ public struct AppShellView: View {
     /// 当前会话；`nil` 表示未登录（页面降级为占位）。
     private let session: PrismSession?
 
+    /// 播放编排器（协商 → 引擎 → 进度上报 → UI）。
+    @State private var playback = PlaybackCoordinator()
+
     /// 工具栏搜索框焦点。
     @FocusState private var isSearchFocused: Bool
 
@@ -143,10 +146,13 @@ public struct AppShellView: View {
 
     @ViewBuilder
     private var playerOverlay: some View {
-        if model.isPlayerPresented {
-            PlayerPlaceholderView(route: model.playerRoute) {
-                model.dismissPlayer()
-            }
+        if model.isPlayerPresented, let route = model.playerRoute {
+            PlayerHost(
+                route: route,
+                session: session,
+                coordinator: playback,
+                onDismiss: { model.dismissPlayer() }
+            )
             .transition(.opacity)
             .zIndex(1)
         }
