@@ -309,6 +309,8 @@ public final class PlayerViewModel {
     ///
     /// 页面关闭时调用；引擎本身的生命周期由调用方管理（引擎协议有 `stop()`）。
     public func detach() {
+        onPositionUpdate = nil
+        onPlaybackStateChange = nil
         eventTask?.cancel()
         eventTask = nil
         autoHideTask?.cancel()
@@ -317,6 +319,18 @@ public final class PlayerViewModel {
         bufferingTask = nil
         engine = nil
         renderView = nil
+    }
+
+    // MARK: - 外部失败
+
+    /// 把「还没进引擎就失败」的原因告诉界面。
+    ///
+    /// 协商 / 建会话失败时引擎根本没 attach，`renderView` 为空，页面只会显示
+    /// 「等待播放引擎…」。这条把失败转成 `.failed` 状态，用户才能看到原因并重试。
+    ///
+    /// - Parameter message: 面向用户的失败说明。
+    public func reportPreparationFailure(_ message: String) {
+        handleStateChange(.failed(PlaybackFailure(kind: .load, message: message, isRecoverable: true)))
     }
 
     // MARK: - 事件
@@ -332,6 +346,13 @@ public final class PlayerViewModel {
     ///
     /// - Note: 在 `@MainActor` 上调用；实现里不要做重活（上报器内部会节流）。
     public var onPositionUpdate: ((Ticks, Bool) -> Void)?
+
+    /// 播放状态变化回调（暂停 / 恢复 / 播完 / 失败）。
+    ///
+    /// 为什么需要单独一条：暂停之后引擎位置不再变化，`.positionChanged` 不会再发，
+    /// 只靠位置回调无法把「用户暂停了」告诉服务器。缺了它，服务器会一直认为
+    /// 你还在播放，续播点被推到片子中间。
+    public var onPlaybackStateChange: ((PlaybackState) -> Void)?
 
     private func apply(_ event: PlaybackEvent) {
         switch event {
@@ -419,6 +440,8 @@ public final class PlayerViewModel {
             bufferingTask?.cancel()
             showControls()
         }
+
+        onPlaybackStateChange?(newState)
     }
 
     /// 处理位置更新。

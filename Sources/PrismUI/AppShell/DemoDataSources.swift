@@ -52,8 +52,8 @@ public enum DemoDataSources {
             try await DemoEmbyClient.shared.nextUp(userId: DemoDataSources.userId)
         }
 
-        public func views() async throws -> [MediaItem] {
-            try await DemoEmbyClient.shared.viewItems(userId: DemoDataSources.userId)
+        public func views() async throws -> [MediaView] {
+            try await DemoEmbyClient.shared.views(userId: DemoDataSources.userId)
         }
     }
 

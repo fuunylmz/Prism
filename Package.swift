@@ -113,6 +113,13 @@ let package = Package(
             name: "PrismPlaybackTests",
             dependencies: ["PrismPlayback", "PrismCore", "EmbyAPI"],
             swiftSettings: sharedSwiftSettings
+        ),
+        // 导航模型与页面路由是用户最容易撞到的那层，必须能被单测覆盖：
+        // 「点媒体库跳错页」「登录后仍显示未连接」都发生在这里。
+        .testTarget(
+            name: "PrismUITests",
+            dependencies: ["PrismUI", "PrismCore", "EmbyAPI"],
+            swiftSettings: sharedSwiftSettings
         )
     ],
     swiftLanguageModes: [.v6]

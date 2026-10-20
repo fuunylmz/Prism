@@ -107,6 +107,18 @@ public final class NavigationModel {
     /// 外壳代码不需要改动。未注入的项回落到 ``SidebarItem/route``。
     public var libraryRoutes: [SidebarItem: Route]
 
+    /// 当前内容栏正在展示的一级路由。
+    ///
+    /// 侧边栏只有固定的「电影 / 剧集」两项，但首页可以展示服务器返回的任意媒体库。
+    /// 只保存 `selection` 会丢掉自定义媒体库的真实 id，因此这里保留完整路由作为覆盖值。
+    /// 离开该媒体库时清除；详情和播放器仍然通过 `detailPath` / `playerRoute` 管理。
+    public private(set) var activeRootRoute: Route?
+
+    /// 已加载媒体库的展示名称，key 为服务端 view id。
+    ///
+    /// `Route` 只保存 id 与类型，名称由导航模型单独缓存供筛选栏显示。
+    public var libraryNames: [String: String]
+
     /// 退出登录请求。认证模块接入后由上层赋值。
     public var onSignOut: (() -> Void)?
 
@@ -163,6 +175,8 @@ public final class NavigationModel {
         self.serverStates = [:]
         self.isServerSwitcherPresented = false
         self.libraryRoutes = [:]
+        self.activeRootRoute = nil
+        self.libraryNames = [:]
         self.windowWidth = 1280
         self.isDetailColumnCollapsed = false
         self.searchFocusRequest = 0
@@ -175,10 +189,36 @@ public final class NavigationModel {
     ///
     /// 设置页需要保留用户选中的 tab，因此不能直接使用 `selection.route`。
     public var contentRoute: Route {
+        if let activeRootRoute {
+            return activeRootRoute
+        }
+
         guard let selection else { return .home }
         switch selection {
         case .settings: return .settings(settingsTab)
         default: return route(for: selection)
+        }
+    }
+
+    /// 媒体库路由的展示名称；尚未加载元数据时退回路由默认标题。
+    public func libraryTitle(for route: Route) -> String {
+        guard case let .library(id, _) = route else { return route.title }
+        return libraryNames[id] ?? route.title
+    }
+
+    /// 窗口标题：播放时固定「正在播放」，否则用当前页面标题（媒体库取服务端库名）。
+    public var windowTitle: String {
+        isPlayerPresented ? "正在播放" : libraryTitle(for: contentRoute)
+    }
+
+    /// 注册一个服务端媒体库的完整路由。
+    ///
+    /// 电影 / 剧集库同步到固定侧边栏项；其他库仍可通过首页的完整路由打开。
+    public func registerLibraryRoute(_ route: Route, name: String) {
+        guard case let .library(id, _) = route else { return }
+        libraryNames[id] = name
+        if let sidebarItem = route.sidebarItem {
+            libraryRoutes[sidebarItem] = route
         }
     }
 
@@ -231,11 +271,17 @@ public final class NavigationModel {
 
     /// 详情栏此刻是否应该显示。
     ///
-    /// 三个条件同时满足才显示：路由需要详情栏、用户没有手动折叠、窗口足够宽。
+    /// 规则：
+    /// - 路由本身要支持详情栏，且用户没有手动折叠；
+    /// - 窗口足够宽（≥ ``detailColumnMinimumWindowWidth``）时自动显示；
+    /// - **窗口偏窄但用户已经明确打开某条详情时仍然显示**。
+    ///   最后一条是必要的：窗口最小宽度是 960，而自动显示的阈值是 1040，
+    ///   中间这 80pt 里点任何海报都会「没有任何反应」——详情写进了 `detailPath`，
+    ///   但详情栏宽度被收成 0，用户看不到任何变化，也没有提示。
     public var showsDetailColumn: Bool {
-        canToggleDetailColumn
-            && !isDetailColumnCollapsed
-            && windowWidth >= Self.detailColumnMinimumWindowWidth
+        guard canToggleDetailColumn, !isDetailColumnCollapsed else { return false }
+        if !detailPath.isEmpty { return true }
+        return windowWidth >= Self.detailColumnMinimumWindowWidth
     }
 
     /// 窗口是否处于「放不下三栏」的紧凑宽度。
@@ -293,8 +339,9 @@ public final class NavigationModel {
         isServerSwitcherPresented = false
 
         switch route {
-        case .home, .library, .search, .downloads, .settings:
+        case .home, .search, .downloads, .settings:
             selection = route.sidebarItem
+            activeRootRoute = nil
             detailPath = []
             if case let .settings(tab) = route {
                 settingsTab = tab
@@ -302,6 +349,14 @@ public final class NavigationModel {
             if case .search = route {
                 focusSearch()
             }
+        case .library:
+            // 保留完整路由：媒体库可能是服务端自定义视图，不能拿侧边栏的占位 id 重建。
+            //
+            // 没有侧边栏归属的库（合集 / 音乐 / 图书…）要把选中项清空：
+            // 否则侧边栏会继续高亮「首页」，用户看到的是「首页被选中、内容却是合集库」。
+            selection = route.sidebarItem
+            activeRootRoute = route
+            detailPath = []
         case .detail:
             guard canToggleDetailColumn else { return }
             detailPath = [route]
@@ -387,6 +442,9 @@ public final class NavigationModel {
             selection = .search
             detailPath = []
         }
+        // 直接敲搜索框不会经过 `navigate(to:)`，必须在这里清掉媒体库覆盖路由，
+        // 否则内容栏仍然停在刚才那个媒体库上，搜索结果永远显示不出来。
+        activeRootRoute = nil
     }
 
     // MARK: 列与窗口
@@ -425,6 +483,11 @@ public final class NavigationModel {
         currentServerID = serverID
         selection = .home
         detailPath = []
+        // 媒体库 id 与名称都属于上一台服务器，必须一起清掉，
+        // 否则新服务器会用旧 view id 发请求（通常返回空库或 404）。
+        activeRootRoute = nil
+        libraryRoutes = [:]
+        libraryNames = [:]
         isServerSwitcherPresented = false
     }
 

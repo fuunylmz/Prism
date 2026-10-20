@@ -35,7 +35,10 @@ public protocol HomeDataSource: Sendable {
     func nextUp() async throws -> [MediaItem]
 
     /// 顶层媒体库入口（`/Users/{id}/Views`）。
-    func views() async throws -> [MediaItem]
+    ///
+    /// 保留 `MediaView.collectionType`，因为它是服务端给出的真实库类型；不能
+    /// 降级成 `MediaItem` 后再按库名猜测，否则自定义命名的剧集库会被当成电影库。
+    func views() async throws -> [MediaView]
 }
 
 // MARK: - Emby 实现
@@ -90,11 +93,9 @@ public struct EmbyHomeDataSource: HomeDataSource {
 
     /// 媒体库入口。
     ///
-    /// - Note: `/Views` 返回 ``EmbyAPI/MediaView``，首页只需要其中的通用条目字段，
-    ///   因此直接取 `item`。`CollectionType` 在此丢弃——`HomeContent.libraries`
-    ///   的契约是 `[MediaItem]`；点击库入口时由 `HomeView` 做类型推断
-    ///   （见 ``HomeView`` 的 `libraryRouteType(for:)`）。
-    public func views() async throws -> [MediaItem] {
-        try await client.views(userId: userId).map(\.item)
+    /// 直接返回 `/Views` 的 `MediaView`，保留 `CollectionType`——点击库入口时
+    /// 用它精确决定这是电影库还是剧集库，而不是靠库名猜。
+    public func views() async throws -> [MediaView] {
+        try await client.views(userId: userId)
     }
 }

@@ -236,9 +236,19 @@ public struct LibraryGridView: View {
     private var footer: some View {
         if isLoadingMore || hasMore {
             HStack(spacing: Spacing.sm) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("正在加载更多…")
+                // 菊花只在**真的有请求在飞**时转。
+                // 之前 `hasMore` 也显示菊花，于是翻页失败（网络抖动）之后
+                // 底部会永久转圈「正在加载更多…」，用户以为还在加载。
+                if isLoadingMore {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Palette.textSecondary)
+                }
+
+                Text(isLoadingMore ? "正在加载更多…" : "继续向下滚动加载更多")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textSecondary)
             }
@@ -248,7 +258,7 @@ public struct LibraryGridView: View {
                 onLoadMore()
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(Text("正在加载更多"))
+            .accessibilityLabel(Text(isLoadingMore ? "正在加载更多" : "继续向下滚动加载更多"))
         } else {
             Text("已全部加载")
                 .font(Typography.caption)

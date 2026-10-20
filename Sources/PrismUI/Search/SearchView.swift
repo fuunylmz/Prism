@@ -45,7 +45,11 @@ import SwiftUI
 public struct SearchView: View {
     // MARK: 依赖
 
-    private let viewModel: SearchViewModel
+    /// 视图模型。
+    ///
+    /// 与 `LibraryView` 同理：`@State` 保证父视图重算时不会丢掉已加载的搜索结果。
+    @State private var viewModel: SearchViewModel
+
     private let navigation: NavigationModel?
     private let onOpen: ((SearchResultItem) -> Void)?
     private let onPlay: ((SearchResultItem) -> Void)?
@@ -75,7 +79,7 @@ public struct SearchView: View {
         onOpen: ((SearchResultItem) -> Void)? = nil,
         onPlay: ((SearchResultItem) -> Void)? = nil
     ) {
-        self.viewModel = viewModel
+        _viewModel = State(initialValue: viewModel)
         self.navigation = navigation
         self.popularTerms = popularTerms
         self.onOpen = onOpen

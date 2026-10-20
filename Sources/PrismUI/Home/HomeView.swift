@@ -1,3 +1,4 @@
+import EmbyAPI
 import PrismCore
 import SwiftUI
 
@@ -37,6 +38,9 @@ public struct HomeView: View {
     /// 导航回调（由外壳注入）。
     private let onNavigate: (Route) -> Void
 
+    /// 媒体库列表加载完成后的回调（外壳用它把真实 view id 注入侧边栏）。
+    private let onLibrariesLoaded: ([MediaView]) -> Void
+
     /// 内容区宽度，用于按 UX §5.3 在 24 / 32 之间切换左右边距。
     @State private var contentWidth: CGFloat = 0
 
@@ -52,14 +56,17 @@ public struct HomeView: View {
     ///   - model: 首页视图模型（数据源在构造时注入）。
     ///   - imageResolver: 图片地址解析器；默认 ``HomeImageResolver/disabled``（全部占位图）。
     ///   - onNavigate: 导航回调，首页只上报 ``PrismUI/Route``，不直接持有导航模型。
+    ///   - onLibrariesLoaded: 媒体库列表加载完成回调，默认什么都不做。
     public init(
         model: HomeViewModel,
         imageResolver: HomeImageResolver = .disabled,
-        onNavigate: @escaping (Route) -> Void
+        onNavigate: @escaping (Route) -> Void,
+        onLibrariesLoaded: @escaping ([MediaView]) -> Void = { _ in }
     ) {
         _model = State(initialValue: model)
         self.imageResolver = imageResolver
         self.onNavigate = onNavigate
+        self.onLibrariesLoaded = onLibrariesLoaded
     }
 
     public var body: some View {
@@ -85,6 +92,10 @@ public struct HomeView: View {
         }
         .task {
             await model.load()
+            publishLibrariesIfLoaded()
+        }
+        .onChange(of: model.state) { _, _ in
+            publishLibrariesIfLoaded()
         }
         // ⌘R 刷新（UX §S04「刷新：⌘R」）。工具栏按钮是 macOS 上唯一「看得见」的
         // 刷新入口；快捷键挂在按钮上，窗口激活时即生效。
@@ -117,6 +128,12 @@ public struct HomeView: View {
     }
 
     // MARK: 状态
+
+    /// 首页加载完成后把媒体库列表交给外壳，用于注入侧边栏的真实 view id。
+    private func publishLibrariesIfLoaded() {
+        guard case let .loaded(content) = model.state else { return }
+        onLibrariesLoaded(content.libraries)
+    }
 
     @ViewBuilder
     private var stateContent: some View {
@@ -195,8 +212,13 @@ public struct HomeView: View {
         }
 
         if !content.libraries.isEmpty {
-            LibraryGrid(items: content.libraries) { library in
-                onNavigate(.library(id: library.id, type: Self.libraryRouteType(for: library)))
+            LibraryGrid(libraries: content.libraries) { library in
+                onNavigate(
+                    .library(
+                        id: library.id,
+                        type: LibraryKind(collectionType: library.collectionType)
+                    )
+                )
             }
         }
     }
@@ -278,24 +300,6 @@ public struct HomeView: View {
                 resumeAt: resumeAt.rawValue > 0 ? resumeAt : .zero
             )
         )
-    }
-
-    /// 由媒体库入口条目推断 ``PrismCore/ItemType``。
-    ///
-    /// `/Views` 返回的 `MediaItem` 不携带 `CollectionType`（它在 `MediaView` 上），
-    /// 而 ``PrismUI/Route/library(id:type:)`` 需要 `ItemType`。这里按库名做保守推断：
-    /// 命中「剧集 / TV / Series / Shows」走 `.series`，其余一律 `.movie`——
-    /// 类型只影响库页的标题与网格形态，猜错不会导致功能错误。
-    ///
-    /// - Parameter library: 媒体库条目。
-    /// - Returns: 推断出的条目类型。
-    static func libraryRouteType(for library: MediaItem) -> ItemType {
-        let name = library.name.lowercased()
-        let seriesKeywords = ["剧", "tv", "series", "show", "anime", "动画"]
-        if seriesKeywords.contains(where: { name.contains($0) }) {
-            return .series
-        }
-        return .movie
     }
 }
 
@@ -471,5 +475,5 @@ private struct PartialFailurePreviewDataSource: HomeDataSource {
     func resume() async throws -> [MediaItem] { HomePreviewData.resumeItems }
     func latest(limit: Int) async throws -> [MediaItem] { HomePreviewData.latestItems }
     func nextUp() async throws -> [MediaItem] { throw EmbyError.timeout }
-    func views() async throws -> [MediaItem] { throw EmbyError.serverUnreachable("预览数据：连接被拒绝") }
+    func views() async throws -> [MediaView] { throw EmbyError.serverUnreachable("预览数据：连接被拒绝") }
 }

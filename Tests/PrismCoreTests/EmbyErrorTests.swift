@@ -69,18 +69,25 @@ struct EmbyErrorTests {
         }
     }
 
-    @Test("isRecoverable：只有 timeout / serverUnreachable / unknown 为真")
+    @Test("isRecoverable：网络抖动与 5xx 为真，认证 / 权限 / 不存在 / 解码为假")
     func recoverability() {
         #expect(EmbyError.timeout.isRecoverable)
         #expect(EmbyError.serverUnreachable("boom").isRecoverable)
         #expect(EmbyError.unknown("?").isRecoverable)
 
+        // 5xx 是暂时性的：Emby 在扫描库、转码排队、反代后端重启时都会返回。
+        // 判成不可恢复会让错误页不渲染「重试」按钮，用户在一次服务器抖动后
+        // 就被永久钉死在错误页上（这是真实发生过的故障）。
+        #expect(EmbyError.server(status: 500, message: nil).isRecoverable)
+        #expect(EmbyError.server(status: 502, message: nil).isRecoverable)
+        #expect(EmbyError.server(status: 503, message: nil).isRecoverable)
+
+        // 这些重试多少次都不会变好，重试按钮只会误导用户。
         #expect(!EmbyError.invalidURL.isRecoverable)
         #expect(!EmbyError.unauthorized.isRecoverable)
         #expect(!EmbyError.forbidden.isRecoverable)
         #expect(!EmbyError.notFound.isRecoverable)
         #expect(!EmbyError.decoding("x").isRecoverable)
-        #expect(!EmbyError.server(status: 500, message: nil).isRecoverable)
         #expect(!EmbyError.cancelled.isRecoverable)
     }
 

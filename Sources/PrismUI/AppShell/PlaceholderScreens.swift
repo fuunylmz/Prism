@@ -65,13 +65,13 @@ struct HomePlaceholderView: View {
 struct LibraryPlaceholderView: View {
     /// 服务端视图 id。
     let libraryID: String
-    /// 库的内容类型。
-    let type: ItemType
+    /// 库的内容形态。
+    let type: LibraryKind
 
     var body: some View {
         ShellEmptyState(
-            systemImage: type == .series ? "tv" : "film",
-            title: type == .series ? "剧集" : "电影",
+            systemImage: type.systemImage,
+            title: LocalizedStringKey(type.title),
             message: "媒体库网格将在这里显示，支持筛选、排序与无限滚动。",
             footnote: "库 id：\(libraryID) · 媒体库工单接入后替换此占位"
         )

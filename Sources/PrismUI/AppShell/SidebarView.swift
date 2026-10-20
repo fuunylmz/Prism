@@ -49,9 +49,19 @@ struct SidebarView: View {
     // MARK: 选中绑定
 
     /// 把 `List` 的可空选中项映射到模型；清空选择不改变当前页面。
+    ///
+    /// 首页可能打开任意服务端媒体库（例如第二个电影库），此时 `activeRootRoute`
+    /// 与固定侧边栏项不一致。这种情况下让列表「无选中」，用户再点同一行时
+    /// 选中值会真正变化，`List` 才会回调——否则点「电影」不会有任何反应。
     private var selectionBinding: Binding<SidebarItem?> {
         Binding(
-            get: { model.selection },
+            get: {
+                guard let route = model.activeRootRoute else { return model.selection }
+                guard let item = route.sidebarItem, model.route(for: item) == route else {
+                    return nil
+                }
+                return item
+            },
             set: { newValue in
                 guard let newValue else { return }
                 model.select(newValue)

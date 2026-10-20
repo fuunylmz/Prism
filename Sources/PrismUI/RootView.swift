@@ -25,7 +25,8 @@ public struct RootView: View {
     public var body: some View {
         Group {
             if let demoSession {
-                RootShell(model: NavigationModel(), session: demoSession)
+                RootShell(model: navigationModel(for: demoSession), session: demoSession)
+                    .id(demoSession.session.id)
             } else if DemoMode.isEnabled {
                 preparingView
                     .task {
@@ -57,8 +58,12 @@ public struct RootView: View {
                 await bootstrapper.signedIn(server: server, auth: auth, persist: persist)
             }
         case let .ready(session):
-            RootShell(model: NavigationModel(), session: session)
-                .environment(\.signOutHandler, { await bootstrapper.signOut() })
+            RootShell(
+                model: navigationModel(for: session, signOut: { bootstrapper.requestSignOut() }),
+                session: session
+            )
+            // 换账号 / 换服务器时强制重建外壳，否则 `@State` 会保留旧模型。
+            .id(session.session.id)
         }
     }
 
@@ -72,6 +77,31 @@ public struct RootView: View {
         }
         .frame(minWidth: 960, minHeight: 600)
         .background(Palette.surface)
+    }
+
+    // MARK: 导航
+
+    /// 为当前会话建立带有服务器、用户和连接状态的导航模型。
+    ///
+    /// 服务器胶囊读取的是 `NavigationModel`，不能传一个默认空模型，否则主页面
+    /// 虽然已经拿到有效会话，底部仍会显示「未连接 / 未登录」。
+    /// - Parameter signOut: 侧边栏 / 菜单里「退出登录」要执行的动作。
+    ///   不接线时 `NavigationModel.requestSignOut()` 是空操作，用户点了没有任何反应。
+    @MainActor
+    private func navigationModel(
+        for session: PrismSession,
+        signOut: (@MainActor () -> Void)? = nil
+    ) -> NavigationModel {
+        let model = NavigationModel(
+            servers: [session.server],
+            currentServerID: session.server.id,
+            currentUser: session.user
+        )
+        model.serverStates[session.server.id] = .connected
+        if let signOut {
+            model.onSignOut = signOut
+        }
+        return model
     }
 
     // MARK: 演示模式
@@ -88,20 +118,3 @@ public struct RootView: View {
     }
 }
 
-// MARK: - 登出入口
-
-/// 登出回调的 Environment key。
-///
-/// 用 Environment 而不是逐层传参：侧边栏的「退出登录」在很深的位置，
-/// 一层层传会让每个中间视图都被迫认识会话管理。
-private struct SignOutHandlerKey: EnvironmentKey {
-    static let defaultValue: (@MainActor () async -> Void)? = nil
-}
-
-public extension EnvironmentValues {
-    /// 登出动作；`nil` 表示当前不可登出（例如演示模式）。
-    var signOutHandler: (@MainActor () async -> Void)? {
-        get { self[SignOutHandlerKey.self] }
-        set { self[SignOutHandlerKey.self] = newValue }
-    }
-}

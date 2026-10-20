@@ -81,6 +81,12 @@ private struct ServerStepView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
+            recentSection
+
+            if !model.recentServers.isEmpty {
+                Divider()
+            }
+
             discoveredSection
 
             Divider()
@@ -121,6 +127,41 @@ private struct ServerStepView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(model.isBusy || model.addressText.trimmingCharacters(in: .whitespaces).isEmpty)
                 .keyboardShortcut(.defaultAction)
+            }
+        }
+    }
+
+    /// 最近使用过的服务器：退出登录后不必重新手打地址。
+    @ViewBuilder
+    private var recentSection: some View {
+        if !model.recentServers.isEmpty {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                Text("最近使用")
+                    .font(Typography.headline)
+
+                ForEach(model.recentServers) { server in
+                    Button {
+                        Task { await model.select(server) }
+                    } label: {
+                        HStack {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .foregroundStyle(Palette.accent)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(server.name).font(Typography.body)
+                                Text(server.baseURL.absoluteString)
+                                    .font(Typography.caption)
+                                    .foregroundStyle(Palette.textSecondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(Palette.textSecondary)
+                        }
+                        .contentShape(Rectangle())
+                        .padding(Spacing.sm)
+                        .background(Palette.surface, in: RoundedRectangle(cornerRadius: Radius.card))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }

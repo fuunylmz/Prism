@@ -1,3 +1,4 @@
+import EmbyAPI
 import PrismCore
 import SwiftUI
 
@@ -431,9 +432,12 @@ struct ThumbnailCard: View {
 /// 媒体库网格入口。
 ///
 /// 首页最后一段：把 `/Views` 的结果排成自适应网格，点击进入对应媒体库。
+///
+/// 接收 `MediaView` 而不是 `MediaItem`：`collectionType` 是服务端给出的库类型，
+/// 丢掉它就只能按库名猜，猜不中会把所有库都当成电影库。
 struct LibraryGrid: View {
-    let items: [MediaItem]
-    let onSelect: (MediaItem) -> Void
+    let libraries: [MediaView]
+    let onSelect: (MediaView) -> Void
 
     @Environment(\.homeImageResolver) private var resolver
 
@@ -453,11 +457,11 @@ struct LibraryGrid: View {
                 .accessibilityAddTraits(.isHeader)
 
             LazyVGrid(columns: columns, alignment: .leading, spacing: Spacing.lg) {
-                ForEach(items) { item in
+                ForEach(libraries) { library in
                     LibraryTile(
-                        item: item,
-                        imageURL: resolver.url(for: item, kind: .primary, maxWidth: 480),
-                        onSelect: { onSelect(item) }
+                        library: library,
+                        imageURL: resolver.url(for: library.item, kind: .primary, maxWidth: 480),
+                        onSelect: { onSelect(library) }
                     )
                 }
             }
@@ -467,12 +471,14 @@ struct LibraryGrid: View {
 
 /// 单个媒体库入口卡片。
 private struct LibraryTile: View {
-    let item: MediaItem
+    let library: MediaView
     let imageURL: URL?
     let onSelect: () -> Void
 
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var item: MediaItem { library.item }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -604,7 +610,7 @@ private struct LibraryTile: View {
     VStack(alignment: .leading, spacing: Spacing.lg) {
         MediaRail(
             title: "横版样式",
-            items: HomePreviewData.libraryItems,
+            items: HomePreviewData.latestItems,
             onSelect: { _ in },
             onSeeAll: {},
             style: .landscape,
@@ -621,15 +627,15 @@ private struct LibraryTile: View {
 
 #Preview("LibraryGrid · 有数据 / 无图 / 空") {
     VStack(alignment: .leading, spacing: Spacing.xxl) {
-        LibraryGrid(items: HomePreviewData.libraryItems, onSelect: { _ in })
+        LibraryGrid(libraries: HomePreviewData.libraryViews, onSelect: { _ in })
 
-        LibraryGrid(items: [HomePreviewData.offlineLibrary], onSelect: { _ in })
+        LibraryGrid(libraries: [HomePreviewData.offlineLibrary], onSelect: { _ in })
 
         VStack(alignment: .leading, spacing: Spacing.sm) {
             Text("空 items：只剩分区标题（真实场景由 HomeView 整段隐藏）")
                 .font(Typography.caption)
                 .foregroundStyle(Palette.textSecondary)
-            LibraryGrid(items: [], onSelect: { _ in })
+            LibraryGrid(libraries: [], onSelect: { _ in })
         }
     }
     .padding(Spacing.xl)

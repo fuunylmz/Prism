@@ -152,6 +152,24 @@ public struct DetailContent: Sendable, Equatable {
 
     /// 返回一个只替换了当前季集列表的新内容。
     ///
+    /// 按「级联」语义把已看状态刷到整部剧的集与季上。
+    ///
+    /// Emby 对 `Series` / `Season` 标记已看会连带所有集，但本地只替换同 id 的条目
+    /// （集与剧的 id 不同）。不同步的后果：头部按钮变成「已看」，下面集列表仍是
+    /// 全未看、仍写着「继续观看 S1E1」。
+    ///
+    /// - Parameter played: 是否已看。
+    /// - Returns: 新内容。
+    func replacingPlayedCascade(_ played: Bool) -> DetailContent {
+        DetailContent(
+            item: item,
+            seasons: seasons.map { $0.withPlayed(played) },
+            episodes: episodes.map { $0.withPlayed(played) },
+            similar: similar,
+            people: people
+        )
+    }
+
     /// - Parameter episodes: 新的集列表。
     /// - Returns: 新内容。
     func replacingEpisodes(_ episodes: [MediaItem]) -> DetailContent {
@@ -324,8 +342,14 @@ public final class DetailViewModel {
     /// 视图用 `.task { await model.loadIfNeeded() }` 调用它，因此预览里注入的
     /// `.loading` / `.failed` 状态不会被立刻覆盖。
     public func loadIfNeeded() async {
-        guard case .idle = state else { return }
-        await load()
+        // `.failed` 也要重试：`.task` 在条目切换、详情栏重新出现时都会触发，
+        // 若把失败当成「已有结果」直接返回，用户会被永久钉在错误页上。
+        switch state {
+        case .idle, .failed:
+            await load()
+        case .loading, .loaded, .empty:
+            return
+        }
     }
 
     /// 重新加载详情。
@@ -455,7 +479,13 @@ public final class DetailViewModel {
         do {
             let server = try await dataSource.setPlayed(itemId: content.item.id, played: target)
             guard case let .loaded(latest) = state else { return }
-            state = .loaded(latest.replacingUserData(server, for: content.item.id))
+            var updated = latest.replacingUserData(server, for: content.item.id)
+            // 剧集 / 季：服务端会级联到所有集，本地也要跟着刷，否则集列表与
+            // 「已看 N 集」的计数都停在旧值。
+            if content.isSeries {
+                updated = updated.replacingPlayedCascade(target)
+            }
+            state = .loaded(updated)
         } catch {
             state = .loaded(previous)
             actionError = Self.normalized(error)
@@ -761,6 +791,23 @@ extension MediaItem {
     /// 用公开初始化器重建一份——放在 `Detail` 内部（不扩大模块公共 API），
     /// 只服务详情页的已看 / 收藏切换。
     ///
+    /// 返回一个只把「已看」状态改成 `played` 的副本。
+    ///
+    /// 用于剧集级联：对整部剧标记已看时，服务端会把所有集一起标记，
+    /// 本地集列表也要同步（否则「已看 0 集」「继续观看 S1E1」都不变）。
+    ///
+    /// - Parameter played: 是否已看。
+    /// - Returns: 副本。
+    func withPlayed(_ played: Bool) -> MediaItem {
+        var data = userData
+        data.played = played
+        if played {
+            data.playbackPosition = .zero
+            data.unplayedItemCount = 0
+        }
+        return withUserData(data)
+    }
+
     /// - Parameter userData: 新的用户数据。
     /// - Returns: 副本。
     func withUserData(_ userData: UserItemData) -> MediaItem {

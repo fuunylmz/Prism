@@ -28,6 +28,12 @@ public final class ConnectViewModel {
 
     /// 自动发现的服务器。
     public private(set) var discovered: [DiscoveredServer] = []
+
+    /// 曾经成功连接过的服务器（最近使用优先）。
+    ///
+    /// 退出登录 / token 失效后，用户不该被要求重新手打一遍地址——
+    /// 服务器记录本来就保留着（见 `SessionRestoration.invalidate` 的说明）。
+    public private(set) var recentServers: [ServerConnection] = []
     /// 是否正在自动发现。
     public private(set) var isDiscovering = false
     /// 是否有网络操作在进行（连接校验 / 登录）。
@@ -49,14 +55,21 @@ public final class ConnectViewModel {
     public private(set) var selectedServer: ServerConnection?
 
     private let discovery: ServerDiscovery
+    private let registry: ServerRegistry
     private var discoveryTask: Task<Void, Never>?
     private var client: EmbyClient?
 
     /// 创建视图模型。
     ///
-    /// - Parameter discovery: 发现器；默认用真实 UDP 广播。
-    public init(discovery: ServerDiscovery = ServerDiscovery()) {
+    /// - Parameters:
+    ///   - discovery: 发现器；默认用真实 UDP 广播。
+    ///   - registry: 服务器记录；默认与登录流程共用同一个 `UserDefaults` 域。
+    public init(
+        discovery: ServerDiscovery = ServerDiscovery(),
+        registry: ServerRegistry = ServerRegistry()
+    ) {
         self.discovery = discovery
+        self.registry = registry
     }
 
     // MARK: 第一步
@@ -67,6 +80,9 @@ public final class ConnectViewModel {
         errorMessage = nil
         discovered = []
         isDiscovering = true
+
+        // 历史服务器与局域网发现并行：前者是本地读，几乎瞬时。
+        recentServers = await registry.servers()
 
         discoveryTask = Task { [weak self] in
             guard let self else { return }
@@ -95,6 +111,15 @@ public final class ConnectViewModel {
         } catch {
             errorMessage = "无法连接到 \(input)，请检查地址与网络。"
         }
+    }
+
+    /// 选中一台历史服务器（直接进入登录步骤，不必再探测）。
+    ///
+    /// - Parameter server: 历史记录里的服务器。
+    public func select(_ server: ServerConnection) async {
+        errorMessage = nil
+        selectedServer = server
+        step = .signingIn
     }
 
     /// 选中一个自动发现的服务器。

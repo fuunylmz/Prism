@@ -42,6 +42,12 @@ public final class PlaybackCoordinator {
     /// 当前进度上报器。
     private var reporter: PlaybackProgressReporter?
 
+    /// 本次播放的起播位置。
+    ///
+    /// 用途：引擎刚 attach、还没收到第一条 `.positionChanged` 时 `playerModel.position`
+    /// 仍是 0；这时退出会把续播点写成 0，用户「继续观看」的进度就被清掉了。
+    private var lastKnownStartPosition: Ticks = .zero
+
     /// 准备阶段的状态。
     public enum PreparationState: Sendable, Equatable {
         case idle
@@ -60,7 +66,12 @@ public final class PlaybackCoordinator {
     ///   - itemId: 条目 id。
     ///   - resumeAt: 续播位置；`.zero` 表示从头。
     ///   - session: 当前会话（提供 client / userId / 是否演示）。
-    public func play(itemId: String, resumeAt: Ticks, session: PrismSession) async {
+    public func play(
+        itemId: String,
+        mediaSourceId: String? = nil,
+        resumeAt: Ticks,
+        session: PrismSession
+    ) async {
         await stop()
 
         preparationState = .fetching
@@ -70,7 +81,13 @@ public final class PlaybackCoordinator {
             subtitle = subtitleText(for: item)
 
             preparationState = .negotiating
-            let plan = try await makePlan(item: item, resumeAt: resumeAt, session: session)
+            let plan = try await makePlan(
+                item: item,
+                mediaSourceId: mediaSourceId,
+                resumeAt: resumeAt,
+                session: session
+            )
+            lastKnownStartPosition = plan.startPosition
 
             preparationState = .loading
             try await loadIntoEngine(plan: plan, session: session)
@@ -80,23 +97,33 @@ public final class PlaybackCoordinator {
         } catch {
             let message = (error as? EmbyError).map { String(localized: $0.userMessage) } ?? error.localizedDescription
             preparationState = .failed(message)
+            // 引擎没 attach 时 `playerModel.renderView` 是空的，界面只会显示「等待播放引擎…」。
+            // 把失败同步给播放器模型，用户才能看到原因和「重试」。
+            playerModel.reportPreparationFailure(message)
         }
     }
 
     /// 停止播放并清理资源。
     ///
-    /// 顺序很重要：先让引擎 `stop()`（释放解码器），再停止上报（最后一次 `Stopped`），
-    /// 否则上报器可能拿不到最终位置。
+    /// 顺序很重要：**先停引擎**（用户已经关掉播放器，声音必须立刻停），
+    /// 再发最后一次 `Stopped`。反过来会先 `await` 一次 HTTP POST：
+    /// 服务器卡住时默认超时要等 30 秒，那段时间画面已经消失、声音还在放。
+    /// 位置在停引擎之前抓快照，保证上报的是最后看到的播放位置。
     public func stop() async {
-        if let reporter {
-            await reporter.stop(position: playerModel.position)
-            self.reporter = nil
-        }
+        let lastPosition = max(playerModel.position, lastKnownStartPosition)
         playerModel.onPositionUpdate = nil
+        playerModel.onPlaybackStateChange = nil
+
         if let engine {
             await playerModel.detach()
             await engine.stop()
             self.engine = nil
+        }
+
+        if let reporter {
+            self.reporter = nil
+            // 上报不阻塞界面：网络失败也只是丢一条统计。
+            Task { await reporter.stop(position: lastPosition) }
         }
         preparationState = .idle
     }
@@ -115,6 +142,7 @@ public final class PlaybackCoordinator {
 
     private func makePlan(
         item: MediaItem,
+        mediaSourceId: String?,
         resumeAt: Ticks,
         session: PrismSession
     ) async throws -> PlaybackPlan {
@@ -137,10 +165,14 @@ public final class PlaybackCoordinator {
             )
         }
 
+        // `startTimeTicks` 必须一起传：否则服务端总是从 0 建会话，
+        // 转码流的第一帧就是片头，客户端再 seek 一次会明显卡顿。
         let info = try await session.client.playbackInfo(
             itemId: item.id,
             userId: session.userId,
-            profile: .prismMacOS()
+            profile: .prismMacOS(),
+            startTimeTicks: resumeAt > .zero ? resumeAt : nil,
+            mediaSourceId: mediaSourceId
         )
         // `baseURL` 是必填：Emby 返回的 DirectStreamUrl / TranscodingUrl 是相对路径，
         // 没有服务器根地址产不出可播的绝对 URL。
@@ -162,11 +194,16 @@ public final class PlaybackCoordinator {
 
     private func loadIntoEngine(plan: PlaybackPlan, session: PrismSession) async throws {
         let adapter = try AetherEngineAdapter()
+        // 转码流的起点由 URL 的 `StartTimeTicks` 决定，引擎再 seek 一次会变成
+        // 双重偏移（先跳到起点，再按相对位置跳）。直连 / 直封是静态流，必须由引擎 seek。
+        let engineStart: Ticks = plan.method == .transcode ? .zero : plan.startPosition
         let request = PlaybackRequest(
             url: plan.url,
             method: plan.method,
             headers: plan.headers,
-            startPosition: plan.startPosition
+            startPosition: engineStart,
+            audioStreamIndex: plan.audioStreamIndex,
+            subtitleStreamIndex: plan.subtitleStreamIndex
         )
         try await adapter.load(request)
         await playerModel.attach(engine: adapter)
@@ -194,6 +231,30 @@ public final class PlaybackCoordinator {
             guard let self else { return }
             Task { await self.reportPosition(position, isPaused: isPaused) }
         }
+
+        // 暂停 / 恢复必须单独上报：暂停后引擎不再发位置事件，
+        // 只靠位置回调永远不会触发 `Pause`，服务器会把续播点一路推到片尾。
+        playerModel.onPlaybackStateChange = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .paused:
+                Task { await self.reportInteraction(.pause) }
+            case .playing:
+                Task { await self.reportInteraction(.unpause) }
+            case .ended:
+                // 播完要落一次 Stopped，否则服务器会一直认为会话还在播放。
+                Task { await self.finishReporting() }
+            case .idle, .loading, .buffering, .failed:
+                break
+            }
+        }
+    }
+
+    /// 自然播完时结束会话上报（只发一次，避免与 `stop()` 重复）。
+    private func finishReporting() async {
+        guard let reporter else { return }
+        self.reporter = nil
+        await reporter.stop(position: playerModel.position)
     }
 
     /// 转发一次位置上报。

@@ -1,3 +1,4 @@
+import EmbyAPI
 import Foundation
 import Observation
 import PrismCore
@@ -50,7 +51,10 @@ public struct HomeContent: Sendable, Equatable {
     /// 最新添加。
     public let latest: [MediaItem]
     /// 媒体库入口。
-    public let libraries: [MediaItem]
+    ///
+    /// 保留 `MediaView`（含 `collectionType`）而不是降级成 `MediaItem`：
+    /// 点击入口时要用服务端给的真实类型决定打开哪个库。
+    public let libraries: [MediaView]
 
     /// 创建首页内容。
     ///
@@ -63,7 +67,7 @@ public struct HomeContent: Sendable, Equatable {
         resume: [MediaItem] = [],
         nextUp: [MediaItem] = [],
         latest: [MediaItem] = [],
-        libraries: [MediaItem] = []
+        libraries: [MediaView] = []
     ) {
         self.resume = resume
         self.nextUp = nextUp
@@ -79,13 +83,13 @@ public struct HomeContent: Sendable, Equatable {
     /// 取某个分区的条目。
     ///
     /// - Parameter section: 分区。
-    /// - Returns: 该分区的条目（可能为空）。
+    /// - Returns: 该分区的条目（可能为空）。媒体库分区不是条目，返回空数组。
     public func items(in section: HomeSection) -> [MediaItem] {
         switch section {
         case .resume: resume
         case .nextUp: nextUp
         case .latest: latest
-        case .libraries: libraries
+        case .libraries: []
         }
     }
 }
@@ -100,7 +104,18 @@ private struct SectionOutcome: Sendable {
     /// 分区。
     let section: HomeSection
     /// 该分区的结果。
-    let result: Result<[MediaItem], EmbyError>
+    let result: Result<SectionPayload, EmbyError>
+}
+
+/// 一个分区返回的数据形态。
+///
+/// 前三个分区是条目列表，媒体库分区是带 `collectionType` 的 `MediaView`。
+/// 用枚举而不是统一转成 `MediaItem`，正是为了不丢服务端的库类型。
+private enum SectionPayload: Sendable {
+    /// 条目列表。
+    case items([MediaItem])
+    /// 媒体库入口。
+    case libraries([MediaView])
 }
 
 // MARK: - 视图模型
@@ -244,8 +259,8 @@ public final class HomeViewModel {
 
         for outcome in outcomes {
             switch outcome.result {
-            case let .success(items):
-                content = Self.merging(items, into: content, for: outcome.section)
+            case let .success(payload):
+                content = Self.merging(payload, into: content, for: outcome.section)
             case let .failure(error):
                 errors[outcome.section] = error
             }
@@ -280,16 +295,16 @@ public final class HomeViewModel {
         do {
             try await withThrowingTaskGroup(of: SectionOutcome.self) { group in
                 group.addTask {
-                    await outcome(.resume) { try await dataSource.resume() }
+                    await outcome(.resume) { .items(try await dataSource.resume()) }
                 }
                 group.addTask {
-                    await outcome(.nextUp) { try await dataSource.nextUp() }
+                    await outcome(.nextUp) { .items(try await dataSource.nextUp()) }
                 }
                 group.addTask {
-                    await outcome(.latest) { try await dataSource.latest(limit: 20) }
+                    await outcome(.latest) { .items(try await dataSource.latest(limit: 20)) }
                 }
                 group.addTask {
-                    await outcome(.libraries) { try await dataSource.views() }
+                    await outcome(.libraries) { .libraries(try await dataSource.views()) }
                 }
 
                 for try await finished in group {
@@ -310,7 +325,7 @@ public final class HomeViewModel {
     /// - Returns: 该分区的结果。
     private nonisolated static func outcome(
         _ section: HomeSection,
-        _ operation: @Sendable () async throws -> [MediaItem]
+        _ operation: @Sendable () async throws -> SectionPayload
     ) async -> SectionOutcome {
         do {
             return SectionOutcome(section: section, result: .success(try await operation()))
@@ -326,24 +341,26 @@ public final class HomeViewModel {
     /// 把某个分区的结果并进内容对象。
     ///
     /// - Parameters:
-    ///   - items: 该分区的条目。
+    ///   - payload: 该分区的数据。
     ///   - content: 已收集的内容。
     ///   - section: 分区。
     /// - Returns: 合并后的内容。
     private nonisolated static func merging(
-        _ items: [MediaItem],
+        _ payload: SectionPayload,
         into content: HomeContent,
         for section: HomeSection
     ) -> HomeContent {
-        switch section {
-        case .resume:
+        switch (section, payload) {
+        case let (.resume, .items(items)):
             HomeContent(resume: items, nextUp: content.nextUp, latest: content.latest, libraries: content.libraries)
-        case .nextUp:
+        case let (.nextUp, .items(items)):
             HomeContent(resume: content.resume, nextUp: items, latest: content.latest, libraries: content.libraries)
-        case .latest:
+        case let (.latest, .items(items)):
             HomeContent(resume: content.resume, nextUp: content.nextUp, latest: items, libraries: content.libraries)
-        case .libraries:
-            HomeContent(resume: content.resume, nextUp: content.nextUp, latest: content.latest, libraries: items)
+        case let (.libraries, .libraries(views)):
+            HomeContent(resume: content.resume, nextUp: content.nextUp, latest: content.latest, libraries: views)
+        default:
+            content
         }
     }
 

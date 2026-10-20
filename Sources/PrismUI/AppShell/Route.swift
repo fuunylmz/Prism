@@ -21,8 +21,8 @@ public enum Route: Hashable, Sendable {
     ///
     /// - Parameters:
     ///   - id: 服务端视图 id（Emby `/Users/{id}/Views` 返回的 `Id`）。
-    ///   - type: 库的内容类型，决定标题、图标与网格形态。
-    case library(id: String, type: ItemType)
+    ///   - type: 库的内容形态，来自服务端 `CollectionType`，决定标题、图标与查询类型。
+    case library(id: String, type: LibraryKind)
     /// 搜索落地页与结果页。
     case search
     /// 下载管理（v1.1；v1.0 侧边栏以禁用态展示）。
@@ -132,7 +132,7 @@ extension SidebarItem {
     public var route: Route {
         switch self {
         case .home: .home
-        case .movies: .library(id: "library.movies", type: .movie)
+        case .movies: .library(id: "library.movies", type: .movies)
         case .series: .library(id: "library.series", type: .series)
         case .search: .search
         case .downloads: .downloads
@@ -173,11 +173,7 @@ extension Route {
         switch self {
         case .home: "首页"
         case let .library(_, type):
-            switch type {
-            case .movie: "电影"
-            case .series: "剧集"
-            default: "媒体库"
-            }
+            type.title
         case .search: "搜索"
         case .downloads: "下载"
         case let .settings(tab): tab.title
@@ -191,11 +187,7 @@ extension Route {
         switch self {
         case .home: .home
         case let .library(_, type):
-            switch type {
-            case .movie: .movies
-            case .series: .series
-            default: nil
-            }
+            type.sidebarItem
         case .search: .search
         case .downloads: .downloads
         case .settings: .settings

@@ -1,3 +1,4 @@
+import EmbyAPI
 import Foundation
 import PrismCore
 import SwiftUI
@@ -42,8 +43,8 @@ struct PreviewHomeDataSource: HomeDataSource {
         try await respond(HomePreviewData.nextUpItems)
     }
 
-    func views() async throws -> [MediaItem] {
-        try await respond(HomePreviewData.libraryItems)
+    func views() async throws -> [MediaView] {
+        try await respondLibraries(HomePreviewData.libraryViews)
     }
 
     /// 按 ``mode`` 决定「返回数据 / 返回空 / 抛错 / 挂起」。
@@ -60,6 +61,24 @@ struct PreviewHomeDataSource: HomeDataSource {
             throw EmbyError.serverUnreachable("预览数据：连接被拒绝")
         case .partialFailure:
             return items
+        case .loading:
+            try await Task.sleep(for: .seconds(3600))
+            return []
+        }
+    }
+
+    /// 媒体库分区的同款行为（返回 `MediaView`）。
+    ///
+    /// - Parameter libraries: `.loaded` 下的媒体库列表。
+    /// - Returns: 媒体库列表。
+    private func respondLibraries(_ libraries: [MediaView]) async throws -> [MediaView] {
+        switch mode {
+        case .loaded, .partialFailure:
+            return libraries
+        case .empty:
+            return []
+        case .failing:
+            throw EmbyError.serverUnreachable("预览数据：连接被拒绝")
         case .loading:
             try await Task.sleep(for: .seconds(3600))
             return []
@@ -300,34 +319,50 @@ enum HomePreviewData {
 
     // MARK: 媒体库
 
-    /// 媒体库入口。
-    static let libraryItems: [MediaItem] = [
-        library(id: "lib-movies", name: "电影", artwork: "tag-lib-movies", count: 412),
-        library(id: "lib-tv", name: "剧集", artwork: "tag-lib-tv", count: 38),
-        library(id: "lib-anime", name: "动画", artwork: "tag-lib-anime", count: 96),
-        library(id: "lib-doc", name: "纪录片", artwork: "tag-lib-doc", count: 24)
+    /// 媒体库入口（保留服务端 `CollectionType`）。
+    static let libraryViews: [MediaView] = [
+        library(id: "lib-movies", name: "电影", collectionType: .movies, artwork: "tag-lib-movies", count: 412),
+        library(id: "lib-tv", name: "剧集", collectionType: .tvShows, artwork: "tag-lib-tv", count: 38),
+        library(id: "lib-anime", name: "动画", collectionType: .tvShows, artwork: "tag-lib-anime", count: 96),
+        library(id: "lib-doc", name: "纪录片", collectionType: .movies, artwork: "tag-lib-doc", count: 24)
     ]
 
     /// 没有封面图的媒体库（验证网格里的占位图标）。
-    static let offlineLibrary = library(id: "lib-offline", name: "未挂载的库", artwork: nil, count: nil)
+    static let offlineLibrary = library(
+        id: "lib-offline",
+        name: "未挂载的库",
+        collectionType: nil,
+        artwork: nil,
+        count: nil
+    )
 
-    /// 构造一个媒体库入口条目。
+    /// 构造一个媒体库入口。
     ///
     /// - Parameters:
     ///   - id: 库 id。
     ///   - name: 库名。
+    ///   - collectionType: 服务端库类型；`nil` 表示混合库。
     ///   - artwork: 主图 tag；`nil` 表示没有封面。
     ///   - count: 条目数。
-    /// - Returns: 条目。
-    private static func library(id: String, name: String, artwork: String?, count: Int?) -> MediaItem {
-        MediaItem(
-            id: id,
-            name: name,
-            type: .collectionFolder,
-            serverId: "preview-server",
-            imageTags: artwork.map { [ImageKind.primary: $0] } ?? [:],
-            childCount: count,
-            isFolder: true
+    /// - Returns: 媒体库入口。
+    private static func library(
+        id: String,
+        name: String,
+        collectionType: LibraryType?,
+        artwork: String?,
+        count: Int?
+    ) -> MediaView {
+        MediaView(
+            item: MediaItem(
+                id: id,
+                name: name,
+                type: .collectionFolder,
+                serverId: "preview-server",
+                imageTags: artwork.map { [ImageKind.primary: $0] } ?? [:],
+                childCount: count,
+                isFolder: true
+            ),
+            collectionType: collectionType
         )
     }
 }

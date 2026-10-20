@@ -125,13 +125,20 @@ public enum EmbyError: Error, Sendable, Equatable, Hashable {
 
     /// 是否属于“重试可能成功”的错误。
     ///
-    /// 只有 `timeout`、`serverUnreachable`、`unknown` 为 `true`：
-    /// 认证、权限、资源不存在、解码错误重试多少次都不会变好。
+    /// `timeout` / `serverUnreachable` / `unknown` / `server` 为 `true`：
+    /// 前三个是网络层抖动，`server` 是 5xx —— Emby 在扫描库、转码排队、
+    /// 反代后端重启时都会返回 5xx，这些过几秒重试就恢复了。
+    ///
+    /// 认证、权限、资源不存在、解码错误重试多少次都不会变好，因此为 `false`。
+    ///
+    /// - Important: 这个属性直接决定错误页是否渲染「重试」按钮
+    ///   （见 `PrismUI/DesignSystem/StateViews.swift`）。把 5xx 判成不可恢复，
+    ///   等于让用户在一次服务器抖动后永久卡在错误页上。
     public var isRecoverable: Bool {
         switch self {
-        case .timeout, .serverUnreachable, .unknown:
+        case .timeout, .serverUnreachable, .unknown, .server:
             true
-        case .invalidURL, .unauthorized, .forbidden, .notFound, .decoding, .server, .cancelled:
+        case .invalidURL, .unauthorized, .forbidden, .notFound, .decoding, .cancelled:
             false
         }
     }

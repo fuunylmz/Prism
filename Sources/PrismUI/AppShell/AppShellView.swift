@@ -1,3 +1,4 @@
+import PrismCore
 import SwiftUI
 
 // MARK: - 应用外壳
@@ -57,7 +58,7 @@ public struct AppShellView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 960, minHeight: 600)
-        .navigationTitle(model.isPlayerPresented ? "正在播放" : model.contentRoute.title)
+        .navigationTitle(model.windowTitle)
         .toolbar { toolbarContent }
         .toolbarVisibility(model.isPlayerPresented ? .hidden : .automatic, for: .windowToolbar)
         .searchable(
@@ -95,6 +96,13 @@ public struct AppShellView: View {
             playerOverlay
         }
         .animation(playerAnimation, value: model.isPlayerPresented)
+        // 关闭播放器有三条路径：播放器内的返回按钮、Esc、⌘[。
+        // 后两条只改 `isPlayerPresented`，不会走 `PlayerHost` 的返回回调，
+        // 因此必须在这里兜底停止引擎——否则画面消失，解码器与进度上报仍在跑。
+        .onChange(of: model.isPlayerPresented) { _, isPresented in
+            guard !isPresented else { return }
+            Task { await playback.stop() }
+        }
     }
 
     // MARK: 详情栏
@@ -199,7 +207,20 @@ private struct ContentColumnView: View {
                         baseURL: session.server.baseURL,
                         accessToken: nil
                     ),
-                    onNavigate: { route in model.navigate(to: route) }
+                    onNavigate: { route in model.navigate(to: route) },
+                    onLibrariesLoaded: { libraries in
+                        // 把服务端真实 view id 注入侧边栏：否则点「电影 / 剧集」
+                        // 会用占位 id 发请求，服务器直接返回空库或 404。
+                        for library in libraries {
+                            model.registerLibraryRoute(
+                                .library(
+                                    id: library.id,
+                                    type: LibraryKind(collectionType: library.collectionType)
+                                ),
+                                name: library.name
+                            )
+                        }
+                    }
                 )
             } else {
                 HomePlaceholderView()
@@ -213,19 +234,25 @@ private struct ContentColumnView: View {
                             : session.libraryDataSource,
                         libraryId: id,
                         // `MediaKind` 是 Emby 的媒体大类（Video/Audio/Photo/Book），
-                        // 不是「电影/剧集」。电影与剧集都属于 Video，具体类型用
-                        // `includeItemTypes` 区分。
-                        kind: .video,
-                        includeItemTypes: type == .series ? [.series] : [.movie]
+                        // 不是「电影/剧集」。具体类型由 `LibraryKind.itemTypes` 决定，
+                        // 它来自服务端 `CollectionType`，不是按库名猜的。
+                        kind: type.mediaKind,
+                        includeItemTypes: type.itemTypes
                     ),
-                    libraryName: model.contentRoute.title,
-                    countUnit: type == .series ? "部" : "部",
+                    libraryName: model.libraryTitle(for: model.contentRoute),
+                    countUnit: type.countUnit,
                     selectedItemID: model.selectedDetailItemID,
                     onOpenDetail: { item in model.navigate(to: .detail(itemId: item.id)) },
                     onPlay: { item in
-                        model.navigate(to: .player(itemId: item.id, mediaSourceId: nil, resumeAt: .zero))
+                        model.navigate(to: .player(
+                            itemId: item.id,
+                            mediaSourceId: item.mediaSources.first?.id,
+                            resumeAt: Self.resumePoint(for: item)
+                        ))
                     }
                 )
+                // 换库必须换一个 VM：`@State` 会保留上一个库的分页、排序与筛选。
+                .id(id)
             } else {
                 LibraryPlaceholderView(libraryID: id, type: type)
             }
@@ -239,10 +266,18 @@ private struct ContentColumnView: View {
                     ),
                     navigation: model,
                     onOpen: { result in
+                        // 人物 / 合集等非可播条目不该进电影详情页：
+                        // 那里会给一个能点、但必然失败的播放按钮。
+                        guard result.kind == .movie || result.kind == .series || result.kind == .episode
+                        else { return }
                         model.navigate(to: .detail(itemId: result.id))
                     },
                     onPlay: { result in
-                        model.navigate(to: .player(itemId: result.id, mediaSourceId: nil, resumeAt: .zero))
+                        model.navigate(to: .player(
+                            itemId: result.id,
+                            mediaSourceId: result.mediaItem?.mediaSources.first?.id,
+                            resumeAt: result.resumePosition
+                        ))
                     }
                 )
             } else {
@@ -263,6 +298,17 @@ private struct ContentColumnView: View {
             // 播放器是覆盖层，内容栏保持原页面。
             Color.clear
         }
+    }
+
+    /// 播放起点：已看完的从头播，未看完的接着上次。
+    ///
+    /// 媒体库网格与右键菜单都走这一个入口，所以「播放」和「从上次位置继续」
+    /// 不再等价——后者本来就是这个行为。
+    ///
+    /// - Parameter item: 被播放的条目。
+    /// - Returns: 起播位置。
+    static func resumePoint(for item: MediaItem) -> Ticks {
+        item.userData.played ? .zero : item.userData.playbackPosition
     }
 }
 

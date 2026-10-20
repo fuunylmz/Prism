@@ -68,9 +68,14 @@ public enum SortOption: String, Sendable, Hashable, CaseIterable, Codable, Ident
 
     /// 传给 `SortBy` 的字段列表（**逗号分隔由查询构建器负责**）。
     public var sortBy: [ItemSortBy] {
+        // 每个排序都必须以 `SortName` 收尾。
+        //
+        // 只按 `DateCreated` / `Runtime` 排，同一批导入的条目会大量并列；
+        // Emby 对并列项不保证稳定次序，翻页时同一部片子可能出现在两页里、
+        // 也可能一页都刷不到（我们按 id 去重，重复项会被静默吞掉）。
         switch self {
         case .recentlyAdded:
-            [.dateCreated]
+            [.dateCreated, .sortName]
         case .titleAscending:
             [.sortName]
         case .year:
@@ -78,7 +83,7 @@ public enum SortOption: String, Sendable, Hashable, CaseIterable, Codable, Ident
         case .rating:
             [.communityRating, .sortName]
         case .runtime:
-            [.runtime]
+            [.runtime, .sortName]
         }
     }
 
@@ -92,13 +97,13 @@ public enum SortOption: String, Sendable, Hashable, CaseIterable, Codable, Ident
     public var sortOrders: [EmbySortOrder] {
         switch self {
         case .recentlyAdded:
-            [.descending]
+            [.descending, .ascending]
         case .titleAscending:
             [.ascending]
         case .year, .rating:
             [.descending, .ascending]
         case .runtime:
-            [.descending]
+            [.descending, .ascending]
         }
     }
 

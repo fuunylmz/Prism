@@ -39,7 +39,12 @@ import SwiftUI
 /// ```
 public struct LibraryView: View {
     /// 视图模型。
-    @Bindable private var viewModel: LibraryViewModel
+    ///
+    /// 必须用 `@State` 持有：`AppShellView` 每次 body 求值都会构造新的
+    /// `LibraryViewModel` 传进来，如果只做 `@Bindable` 引用，父视图一刷新
+    /// （滚动触发、详情栏开关、窗口变化）就会换成一个全新的空 VM，
+    /// 网格被打回骨架屏并重新请求第一页。
+    @State private var viewModel: LibraryViewModel
 
     private let libraryName: String
     private let countUnit: String
@@ -67,7 +72,7 @@ public struct LibraryView: View {
         onPlay: @escaping (MediaItem) -> Void,
         onShowInFinder: @escaping (MediaItem) -> Void = { _ in }
     ) {
-        self.viewModel = viewModel
+        _viewModel = State(initialValue: viewModel)
         self.libraryName = libraryName
         self.countUnit = countUnit
         self.selectedItemID = selectedItemID
@@ -110,8 +115,27 @@ public struct LibraryView: View {
         .task {
             // `.task` 在视图出现时跑一次、消失时自动取消；
             // `loadFirstPage` 内部有 `isLoading` 守卫，重复触发是安全的。
-            if !viewModel.state.isSettled {
+            //
+            // 只有「已经有内容」时才跳过：`.failed` 也算 settled，若一并跳过，
+            // 一次 5xx 之后用户切走再切回来仍然是那张错误页（页面内又没有刷新入口）。
+            switch viewModel.state {
+            case .loaded, .empty:
+                break
+            case .idle, .loading, .failed:
                 await viewModel.loadFirstPage()
+            }
+        }
+        // ⌘R 刷新：错误页与空态之外也要有手动出口。
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    Task { await viewModel.refresh() }
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .help("刷新媒体库（⌘R）")
+                .disabled(viewModel.state.isLoading)
             }
         }
     }

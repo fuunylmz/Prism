@@ -69,7 +69,9 @@ public final class SessionBootstrapper {
                     phase = .needsConnection
                     return
                 }
-                phase = .ready(makeSession(server: server, auth: session))
+                let prismSession = makeSession(server: server, auth: session)
+                await prismSession.activate()
+                phase = .ready(prismSession)
             case .signedOut, .unknown:
                 phase = .needsConnection
             }
@@ -104,6 +106,14 @@ public final class SessionBootstrapper {
         let session = makeSession(server: server, auth: auth)
         await session.activate()
         phase = .ready(session)
+    }
+
+    /// 从同步上下文（菜单 / 侧边栏按钮）发起登出。
+    ///
+    /// `NavigationModel.onSignOut` 是同步闭包，这里转成任务执行异步清理；
+    /// 不等待结果，`phase` 变化后 SwiftUI 会自动切回登录页。
+    public func requestSignOut() {
+        Task { await signOut() }
     }
 
     /// 登出：清 token、保留服务器记录，退回登录页。
