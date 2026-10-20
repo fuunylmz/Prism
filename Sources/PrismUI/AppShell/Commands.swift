@@ -11,6 +11,7 @@ public struct NavigationModelFocusedKey: FocusedValueKey {
     public typealias Value = NavigationModel
 }
 
+/// 焦点值的键路径扩展：菜单命令通过 `@FocusedValue(\.navigationModel)` 读取模型。
 public extension FocusedValues {
     /// 当前场景的导航模型；窗口未就绪时为 `nil`。
     var navigationModel: NavigationModel? {

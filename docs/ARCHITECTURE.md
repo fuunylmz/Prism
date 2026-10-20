@@ -207,7 +207,8 @@ public protocol EmbyEndpoint: Sendable {
 |---|---|---|
 | `publicInfo()` | `/System/Info/Public` | 连接校验、服务器名/版本 |
 | `authenticate(username:password:)` | `/Users/AuthenticateByName` | 登录拿 AccessToken |
-| `currentUser()` | `/Users/Me` | 恢复会话 |
+| `user(id:)` | `/Users/{Id}` | **恢复会话（首选）** ✅ Emby 有此端点 |
+| `currentUser()` | `/Users/Me` | 恢复会话（**回退**）⚠️ 见下方说明 |
 | `views(userId:)` | `/Users/{id}/Views` | 媒体库列表 |
 | `items(userId:query:)` | `/Users/{id}/Items` | 浏览/搜索/筛选/分页 |
 | `resume(userId:)` | `/Users/{id}/Items/Resume` | 继续观看 |
@@ -221,8 +222,29 @@ public protocol EmbyEndpoint: Sendable {
 | `reportStart/Progress/Stop` | `/Sessions/Playing*` | 进度上报 |
 | `markPlayed/markFavorite` | `/Users/{id}/PlayedItems|FavoriteItems/{itemId}` | 标记 |
 
-### 2.3 服务器发现
+#### ⚠️ `/Users/Me` 是 Jellyfin 端点，Emby 没有（主管已核实）
 
+2026-10-21 由 T1.3 代理提出、主管独立复核，结论一致：
+
+| 证据 | 结果 |
+|---|---|
+| Emby Reference 候选页 `getUsersMe.html` / `getUsersMeQuery.html` 等 7 个名字 | **全部 404** |
+| Emby OpenAPI 的 32 条 `/Users` 路径 | **无 `/Users/Me`** |
+| `GET /Users/{Id}` 的 Reference 页 | **200**（`UserService/getUsersById.html`） |
+| Jellyfin OpenAPI | **有 `/Users/Me`** |
+
+**因此恢复会话的顺序必须是：**
+
+1. 本地已有 `userId` → `GET /Users/{Id}`（Emby 支持）
+2. 失败（404/500）→ 再试 `GET /Users/Me`（Jellyfin 兼容）
+3. 都失败 → 视为 token 失效，回登录页
+
+**不要把 `/Users/Me` 当作唯一路径**，否则连 Emby 4.8 会启动即失败。
+
+> 实现位置：`Sources/EmbyAPI/Endpoints/` 已提供 `UserByIdEndpoint` 与 `user(id:)` 回退；
+> `PrismData` 的会话恢复链路按上述顺序调用。
+
+### 2.3 服务器发现
 ```swift
 public struct DiscoveredServer: Sendable, Identifiable {
     public let id: String        // "\(address):\(port)"

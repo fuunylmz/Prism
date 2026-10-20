@@ -116,3 +116,81 @@ public struct SessionRestoration: Sendable {
         await registry.servers()
     }
 }
+
+// MARK: - 校验已恢复的会话
+
+/// 恢复出的会话是否仍然有效（token 有没有被服务器吊销）。
+///
+/// **为什么需要单独一步**：``SessionRestoration/restore()`` 只读本地存储、不联网，
+/// 所以启动是「秒开」的；但 token 可能已在服务器端被吊销（改密码、管理员踢人、重装服务器）。
+/// 是否联网校验、什么时候校验，由 UI 层决定（也可以延后到首个请求 401 时）。
+///
+/// **端点选择（重要）**：`/Users/Me` 是 **Jellyfin** 的端点，**Emby 没有**
+/// （Emby OpenAPI 的 32 条 `/Users` 路径里不含它，Reference 页 404；
+/// 详见 `docs/ARCHITECTURE.md` §2.2 的核实记录）。所以顺序必须是：
+///
+/// 1. 本地有 `userId` → 先 `GET /Users/{Id}`（Emby 支持）
+/// 2. 404 → 回退 `GET /Users/Me`（兼容 Jellyfin）
+/// 3. 401 → 判定 token 失效，清 token、**保留服务器记录**
+///
+/// 为了可测，取用户的能力用两个闭包注入，而不是直接依赖 `EmbyClient`。
+public struct SessionValidator: Sendable {
+    private let fetchUserById: @Sendable (String) async throws -> EmbyUser
+    private let fetchCurrentUser: @Sendable () async throws -> EmbyUser
+    private let restoration: SessionRestoration
+
+    /// 创建校验器。
+    ///
+    /// - Parameters:
+    ///   - fetchUserById: `GET /Users/{Id}`，通常传 `{ try await client.user(id: $0) }`。
+    ///   - fetchCurrentUser: `GET /Users/Me`，通常传 `{ try await client.currentUser() }`。
+    ///   - restoration: token 失效时用于清理本地状态。
+    public init(
+        fetchUserById: @escaping @Sendable (String) async throws -> EmbyUser,
+        fetchCurrentUser: @escaping @Sendable () async throws -> EmbyUser,
+        restoration: SessionRestoration
+    ) {
+        self.fetchUserById = fetchUserById
+        self.fetchCurrentUser = fetchCurrentUser
+        self.restoration = restoration
+    }
+
+    /// 校验一个已恢复的会话。
+    ///
+    /// - Parameter session: 从本地恢复出的会话。
+    /// - Returns: 校验通过时返回**服务器最新**的用户对象（可能改过名/头像）；
+    ///   token 失效返回 `nil`，且已清掉本地 token（服务器记录保留）。
+    /// - Throws: 网络错误（超时/不可达）**原样抛出**——离线时不应把用户登出。
+    public func validate(_ session: AuthSession) async throws -> EmbyUser? {
+        do {
+            return try await fetchUserById(session.userId)
+        } catch let error as EmbyError {
+            switch error {
+            case .notFound:
+                // userId 在服务器上不存在（用户被删/换了服务器）→ 试 /Users/Me。
+                return try await fallbackToCurrentUser(session: session)
+            case .unauthorized:
+                try await restoration.invalidate(serverId: session.serverId)
+                return nil
+            default:
+                // 超时 / 服务器不可达：交给调用方决定是否离线放行。
+                throw error
+            }
+        }
+    }
+
+    private func fallbackToCurrentUser(session: AuthSession) async throws -> EmbyUser? {
+        do {
+            return try await fetchCurrentUser()
+        } catch let error as EmbyError {
+            switch error {
+            case .unauthorized, .notFound:
+                // 两个端点都不可用 → 视为失效。
+                try await restoration.invalidate(serverId: session.serverId)
+                return nil
+            default:
+                throw error
+            }
+        }
+    }
+}

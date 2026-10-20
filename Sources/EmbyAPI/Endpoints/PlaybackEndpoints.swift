@@ -20,18 +20,24 @@ import PrismCore
 /// )
 /// ```
 ///
-/// ## Emby 与 Jellyfin 的签名差异
+/// ## Emby 与 Jellyfin 的签名差异（已核实）
 ///
 /// | | Emby | Jellyfin |
 /// |---|---|---|
-/// | `POST /Items/{id}/PlaybackInfo` | 官方只声明 **body**，无 query 参数 | 同时有 query 参数 **和** body |
+/// | `POST /Items/{id}/PlaybackInfo` | 参数表**只有** `Id`(path) + `body`，**无 query 参数** | 同时有 15 个 query 参数 **和** body |
 ///
-/// 本端点**默认只带 `UserId` query**（任务书要求，且 Emby 会忽略多余 query 参数），
-/// body 里也写了 `UserId`。
+/// - ✅ Emby 侧证据（逐字段核对）：<https://dev.emby.media/reference/RestAPI/MediaInfoService/postItemsByIdPlaybackinfo.html>
+///   的 Parameters 段只有 `*Id`（path）与 `*body`（`PlaybackInfoRequest`）。
+/// - ✅ Jellyfin 侧证据：<https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json>
+///   → `/Items/{itemId}/PlaybackInfo` → `post`。
 ///
-/// 【待验证】Emby 是否严格校验未知 query 参数：分别用「只 body」「只 query」「两者都发」
-/// 请求 Emby 4.8 / 4.9 / Jellyfin 10.9，对比返回的 `MediaSources` 是否随 `DeviceProfile` 变化。
-/// 验证方法见 `docs/research/emby-api.md` §16.3 第 1 条。
+/// 本端点**仍带一个 `UserId` query**（Prism 契约要求，且 body 里也写了 `UserId`）：
+/// Emby 只读 body，多余 query 参数按常规应被忽略；Jellyfin 侧两边都有值，取哪边都对。
+///
+/// 【待验证】Emby 是否**严格校验**未知 query 参数（若严格会 400）。验证方法：
+/// 分别用「只 body」「只 query」「两者都发」请求 Emby 4.8 / 4.9 / Jellyfin 10.9，
+/// 对比返回的 `MediaSources` 是否随 `DeviceProfile` 变化
+/// （`docs/research/emby-api.md` §16.3 第 1 条）。
 public struct PlaybackInfoEndpoint: EmbyEndpoint {
     /// 条目 id。
     public let itemId: String

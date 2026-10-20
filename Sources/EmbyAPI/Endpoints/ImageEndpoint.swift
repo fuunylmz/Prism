@@ -65,12 +65,20 @@ public struct ImageEndpoint: EmbyEndpoint {
     public let enableImageEnhancers: Bool?
 
     /// 是否叠加「已看」角标。
+    ///
+    /// 【待验证】Emby 当前 Reference 的 `/Items/{Id}/Images/{Type}` 参数表里**没有**该参数
+    /// （Jellyfin 也没有），来源存疑，可能是旧版或社区实现。传了大概会被忽略。
     public let addPlayedIndicator: Bool?
 
     /// 叠加已看百分比（0–100）。
+    ///
+    /// 【待验证】该参数在 **Jellyfin** 的 stable OpenAPI 中存在，但 Emby 当前 Reference
+    /// 的参数表里没有。连 Emby 时传了大概率无效，不要依赖它做角标。
     public let percentPlayed: Double?
 
     /// 叠加未看数量角标。
+    ///
+    /// 【待验证】同上：Jellyfin 有、Emby 当前 Reference 无。
     public let unplayedCount: Int?
 
     /// 透明图背景色（如 `#000000`）。

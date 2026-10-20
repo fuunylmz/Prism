@@ -100,6 +100,13 @@ public final class NavigationModel {
     /// 服务器切换浮层是否展开（服务器胶囊点击 / ⌘⇧S）。
     public var isServerSwitcherPresented: Bool
 
+    /// 媒体库侧边栏项到真实路由的映射（注入点）。
+    ///
+    /// v1.0 的外壳拿不到服务端视图 id，``SidebarItem/route`` 给出的是占位路由；
+    /// 媒体库模块拿到 `/Users/{id}/Views` 之后，把真实 id 写进这里即可，
+    /// 外壳代码不需要改动。未注入的项回落到 ``SidebarItem/route``。
+    public var libraryRoutes: [SidebarItem: Route]
+
     /// 退出登录请求。认证模块接入后由上层赋值。
     public var onSignOut: (() -> Void)?
 
@@ -149,6 +156,7 @@ public final class NavigationModel {
         self.currentUser = currentUser
         self.serverStates = [:]
         self.isServerSwitcherPresented = false
+        self.libraryRoutes = [:]
         self.windowWidth = 1280
         self.isDetailColumnCollapsed = false
         self.searchFocusRequest = 0
@@ -163,8 +171,16 @@ public final class NavigationModel {
         guard let selection else { return .home }
         switch selection {
         case .settings: return .settings(settingsTab)
-        default: return selection.route
+        default: return route(for: selection)
         }
+    }
+
+    /// 侧边栏项对应的实际路由（优先使用 ``libraryRoutes`` 注入的真实库 id）。
+    ///
+    /// - Parameter item: 侧边栏导航项。
+    /// - Returns: 该导航项应展示的路由。
+    public func route(for item: SidebarItem) -> Route {
+        libraryRoutes[item] ?? item.route
     }
 
     /// 当前服务器；未设置 ``currentServerID`` 时回落到列表第一台。
@@ -251,7 +267,7 @@ public final class NavigationModel {
         if item == .settings {
             navigate(to: .settings(settingsTab))
         } else {
-            navigate(to: item.route)
+            navigate(to: route(for: item))
         }
     }
 
@@ -260,7 +276,9 @@ public final class NavigationModel {
     /// 规则：
     /// - 一级导航（首页 / 媒体库 / 搜索 / 下载 / 设置）会替换内容栏根视图，
     ///   并清空详情栈（侧边栏切换不 push）；
-    /// - ``Route/detail(itemId:)`` 会替换详情栈为单条详情；
+    /// - ``Route/detail(itemId:)`` 会替换详情栈为单条详情，**仅在当前路由有详情栏时生效**
+    ///   （首页 / 搜索 / 设置是 `.doubleColumn`，没有第三栏可放详情；搜索结果的条目
+    ///   应由搜索工单在内容栏内 push，而不是走详情栏）；
     /// - ``Route/player(itemId:mediaSourceId:resumeAt:)`` 会打开播放器覆盖层。
     ///
     /// - Parameter route: 目标路由。
@@ -278,6 +296,7 @@ public final class NavigationModel {
                 focusSearch()
             }
         case .detail:
+            guard canToggleDetailColumn else { return }
             detailPath = [route]
             // 用户主动打开详情时，确保详情栏没有被折叠掉。
             isDetailColumnCollapsed = false
@@ -288,8 +307,11 @@ public final class NavigationModel {
 
     /// 在详情栏压入一条详情（用于「更多相似」「查看全部」等后续工单）。
     ///
+    /// 与 ``navigate(to:)`` 一样，只有当前路由带详情栏时才生效。
+    ///
     /// - Parameter itemId: 条目 id。
     public func pushDetail(itemId: String) {
+        guard canToggleDetailColumn else { return }
         detailPath.append(.detail(itemId: itemId))
         isDetailColumnCollapsed = false
     }

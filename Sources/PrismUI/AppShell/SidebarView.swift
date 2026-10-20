@@ -23,26 +23,26 @@ struct SidebarView: View {
     private let toolItems: [SidebarItem] = [.search, .downloads]
 
     var body: some View {
-        VStack(spacing: 0) {
-            brandHeader
-
-            List(selection: selectionBinding) {
-                Section("媒体库") {
-                    ForEach(libraryItems, id: \.self) { item in
-                        SidebarRow(item: item)
-                    }
-                }
-
-                Section("工具") {
-                    ForEach(toolItems, id: \.self) { item in
-                        SidebarRow(item: item)
-                    }
+        // 用 `safeAreaInset` 固定页头 / 页脚，而不是外包一层 VStack：
+        // 只有让 List 成为侧边栏的根视图，它才会吃到窗口工具栏的安全区inset，
+        // 页头才不会滑到标题栏（红绿灯）下面；同时保留 `.listStyle(.sidebar)`
+        // 的系统选中色与原生滚动行为（§2.3 亦要求设置行用 safeAreaInset 固定）。
+        List(selection: selectionBinding) {
+            Section("媒体库") {
+                ForEach(libraryItems, id: \.self) { item in
+                    SidebarRow(item: item)
                 }
             }
-            .listStyle(.sidebar)
 
-            footer
+            Section("工具") {
+                ForEach(toolItems, id: \.self) { item in
+                    SidebarRow(item: item)
+                }
+            }
         }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .top, spacing: 0) { brandHeader }
+        .safeAreaInset(edge: .bottom, spacing: 0) { footer }
         .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
     }
 
@@ -96,6 +96,10 @@ struct SidebarView: View {
         .padding(.horizontal, Spacing.sm)
         .padding(.top, Spacing.xs)
         .padding(.bottom, Spacing.sm)
+        // 固定在底部时不随列表滚动：`safeAreaInset` 只预留空间，滚动内容仍会从下方经过，
+        // 因此需要一层 bar 材质挡住（与 macOS 的固定页脚行为一致）。
+        // TODO: v1.1 侧边栏项变多（合集 / 播放列表 / 音乐）后，页头同样需要这层材质。
+        .background(.bar)
     }
 }
 
