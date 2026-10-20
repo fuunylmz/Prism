@@ -42,6 +42,9 @@ public final class PlaybackCoordinator {
     /// 当前进度上报器。
     private var reporter: PlaybackProgressReporter?
 
+    /// 播放链路日志。
+    private static let logger: any Logging = OSLogger(category: "playback")
+
     /// 本次播放的起播位置。
     ///
     /// 用途：引擎刚 attach、还没收到第一条 `.positionChanged` 时 `playerModel.position`
@@ -165,21 +168,46 @@ public final class PlaybackCoordinator {
             )
         }
 
+        // 设置页里的画质 / 语言必须参与协商，否则用户改了「限制码率」「首选字幕」
+        // 对真实播放毫无影响——协商仍在用全默认值。
+        let preferences = PlaybackPreferences(appSettings: AppSettings.shared)
+        let profile = DeviceProfile.prismMacOS(
+            maxStreamingBitrate: Self.streamingBitrateLimit(from: AppSettings.shared)
+        )
+
         // `startTimeTicks` 必须一起传：否则服务端总是从 0 建会话，
         // 转码流的第一帧就是片头，客户端再 seek 一次会明显卡顿。
-        let info = try await session.client.playbackInfo(
-            itemId: item.id,
-            userId: session.userId,
-            profile: .prismMacOS(),
-            startTimeTicks: resumeAt > .zero ? resumeAt : nil,
-            mediaSourceId: mediaSourceId
-        )
+        let info: PlaybackInfoResponse
+        do {
+            info = try await Self.fetchPlaybackInfo(
+                client: session.client,
+                itemId: item.id,
+                userId: session.userId,
+                profile: profile,
+                startTimeTicks: resumeAt > .zero ? resumeAt : nil,
+                mediaSourceId: mediaSourceId
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // 协商失败不该直接变成黑屏：退到静态直连地址，多数片源能正常播。
+            if let plan = fallbackPlan(
+                item: item,
+                mediaSourceId: mediaSourceId,
+                resumeAt: resumeAt,
+                session: session
+            ) {
+                Self.logger.warning("协商失败，回退静态直连：\(error.localizedDescription)")
+                return plan
+            }
+            throw error
+        }
         // `baseURL` 是必填：Emby 返回的 DirectStreamUrl / TranscodingUrl 是相对路径，
         // 没有服务器根地址产不出可播的绝对 URL。
         // `authHeaders` 兜底：URL 里没有 api_key 时靠它带上鉴权头。
         let negotiator = PlaybackNegotiator(
-            profile: .prismMacOS(),
-            settings: PlaybackPreferences(),
+            profile: profile,
+            settings: preferences,
             baseURL: session.server.baseURL,
             authHeaders: ["X-Emby-Token": session.accessToken]
         )
@@ -189,6 +217,113 @@ public final class PlaybackCoordinator {
             startPosition: resumeAt,
             audioStreamIndex: nil,
             subtitleStreamIndex: nil
+        )
+    }
+
+    /// 把设置页的画质选项换算成设备档案的流码率上限（bps）。
+    ///
+    /// 两个来源取更严格的那个：`preferredQuality` 的预设建议值，与用户手填的
+    /// `maxBitrateMbps`。都为 0 / nil 时回落到「不限制」。
+    ///
+    /// - Parameter settings: 应用设置。
+    /// - Returns: 码率上限（bps）。
+    static func streamingBitrateLimit(from settings: AppSettings) -> Int64 {
+        let preset = settings.preferredQuality.suggestedBitrateMbps ?? 0
+        let manual = settings.maxBitrateMbps
+        let candidates = [preset, manual].filter { $0 > 0 }
+        guard let mbps = candidates.min() else { return 120_000_000 }
+        return Int64(mbps) * 1_000_000
+    }
+
+    /// 取播放协商结果，失败时重试一次。
+    ///
+    /// `PlaybackInfo` 是 POST，`RetryPolicy` 只对幂等的 GET 重试，所以这里必须
+    /// 自己重试：一次瞬时 5xx / 反代抖动不该让用户直接看到「播不了」。
+    ///
+    /// - Parameters:
+    ///   - client: 已登录的客户端。
+    ///   - itemId: 条目 id。
+    ///   - userId: 用户 id。
+    ///   - profile: 设备能力档案。
+    ///   - startTimeTicks: 起播位置。
+    ///   - mediaSourceId: 指定的媒体源。
+    /// - Returns: 协商结果。
+    /// - Throws: 两次都失败时抛出最后一次的错误。
+    private static func fetchPlaybackInfo(
+        client: EmbyClient,
+        itemId: String,
+        userId: String,
+        profile: DeviceProfile,
+        startTimeTicks: Ticks?,
+        mediaSourceId: String?
+    ) async throws -> PlaybackInfoResponse {
+        func attempt() async throws -> PlaybackInfoResponse {
+            try await client.playbackInfo(
+                itemId: itemId,
+                userId: userId,
+                profile: profile,
+                startTimeTicks: startTimeTicks,
+                mediaSourceId: mediaSourceId
+            )
+        }
+
+        do {
+            return try await attempt()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // 认证 / 权限 / 不存在重试也没用，直接抛。
+            if let emby = error as? EmbyError, !emby.isRecoverable {
+                throw error
+            }
+            try? await Task.sleep(for: .milliseconds(400))
+            return try await attempt()
+        }
+    }
+
+    /// 协商彻底失败时的兜底：直接按静态流地址起播。
+    ///
+    /// 依据 <https://dev.emby.media/doc/restapi/Video-Streaming.html>：
+    /// 直连一个文件只需要 `Static=true` + `MediaSourceId`。这条路径拿不到
+    /// 服务器算好的转码参数，但比「黑屏 + 播放不了」好得多。
+    ///
+    /// - Parameters:
+    ///   - item: 条目。
+    ///   - mediaSourceId: 指定的媒体源；`nil` 时用条目自身的 id。
+    ///   - resumeAt: 起播位置。
+    ///   - session: 当前会话。
+    /// - Returns: 兜底播放计划；无法拼出地址时为 `nil`。
+    private func fallbackPlan(
+        item: MediaItem,
+        mediaSourceId: String?,
+        resumeAt: Ticks,
+        session: PrismSession
+    ) -> PlaybackPlan? {
+        let builder = TranscodeURLBuilder(baseURL: session.server.baseURL)
+        let sourceId = mediaSourceId ?? item.mediaSources.first?.id ?? item.id
+        let path = builder.staticStreamPath(
+            itemId: item.id,
+            mediaSourceId: sourceId,
+            playSessionId: nil
+        )
+        guard let url = try? RequestBuilder.joinedURL(
+            baseURL: session.server.baseURL,
+            path: path,
+            query: ["api_key": session.accessToken]
+        ) else {
+            return nil
+        }
+        return PlaybackPlan(
+            method: .directPlay,
+            url: url,
+            headers: ["X-Emby-Token": session.accessToken],
+            mediaSourceId: sourceId,
+            playSessionId: nil,
+            startPosition: resumeAt,
+            audioStreamIndex: nil,
+            subtitleStreamIndex: nil,
+            duration: item.runTime,
+            reason: .directPlaySupported
         )
     }
 
@@ -205,9 +340,14 @@ public final class PlaybackCoordinator {
             audioStreamIndex: plan.audioStreamIndex,
             subtitleStreamIndex: plan.subtitleStreamIndex
         )
-        try await adapter.load(request)
+        // 先 attach 再 load。
+        //
+        // `load()` 里要做打开源、探测流信息、建会话，可能几秒钟；期间引擎会发
+        // `.loading`。如果等 load 返回后才 attach，事件流还没人消费，
+        // 用户面对的是纯黑窗口（`renderView` 为空），菊花只在加载**结束**后闪一下。
         await playerModel.attach(engine: adapter)
         engine = adapter
+        try await adapter.load(request)
     }
 
     private func startReporting(item: MediaItem, plan: PlaybackPlan, session: PrismSession) async {

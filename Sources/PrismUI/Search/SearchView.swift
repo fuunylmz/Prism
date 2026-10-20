@@ -317,7 +317,7 @@ public struct SearchView: View {
 
     private func summary(_ results: SearchResults) -> some View {
         HStack(spacing: Spacing.sm) {
-            Text("「\(viewModel.trimmedQuery)」共 \(results.totalCount) 个结果")
+            Text("「\(viewModel.trimmedQuery)」共 \(results.totalCountText) 个结果")
                 .font(Typography.headline)
                 .foregroundStyle(Palette.textPrimary)
                 .lineLimit(1)

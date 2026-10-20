@@ -95,7 +95,8 @@ public struct LibraryView: View {
                     Task { await viewModel.apply(sort: newSort) }
                 },
                 onFiltersChange: { newFilters in
-                    Task { await viewModel.apply(filters: newFilters) }
+                    // 滑块 / 多选是高频输入：走防抖路径，拖动一次只发一个请求。
+                    viewModel.scheduleFilters(newFilters)
                 },
                 onLayoutChange: { newLayout in
                     viewModel.layout = newLayout

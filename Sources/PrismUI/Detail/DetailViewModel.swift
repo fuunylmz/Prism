@@ -297,6 +297,12 @@ public final class DetailViewModel {
     /// 全部季的集（首次加载时一次取回，供默认季定位与季切换复用）。
     private var allEpisodes: [MediaItem] = []
 
+    /// 已经向服务端确认过的季 id（哪怕确认结果是「这一季没有集」）。
+    ///
+    /// 只用 `allEpisodes` 判断「是否已缓存」有漏洞：某一季确实是空的时候，
+    /// 缓存永远为空，于是每次切回这一季都会重新发请求（还会在失败时弹错误）。
+    private var fetchedSeasonIDs: Set<String> = []
+
     /// 加载代数：每次 `load()` 自增，用来丢弃过期响应。
     private var loadGeneration = 0
 
@@ -381,8 +387,16 @@ public final class DetailViewModel {
             guard generation == loadGeneration else { return }
 
             self.allEpisodes = allEpisodes
-            let seasonID = Self.defaultSeasonID(seasons: seasons, allEpisodes: allEpisodes)
-            selectedSeasonId = seasonID
+            // 整页重载会重新拉全部集，之前的「空季」结论作废。
+            self.fetchedSeasonIDs = []
+            // 刷新（⋯ →「刷新详情」）时保留用户当前选中的季：
+            // 无脑重置会让正在看第 5 季的人被弹回第 1 季。
+            if let current = selectedSeasonId, seasons.contains(where: { $0.id == current }) {
+                selectedSeasonId = current
+            } else {
+                selectedSeasonId = Self.defaultSeasonID(seasons: seasons, allEpisodes: allEpisodes)
+            }
+            let seasonID = selectedSeasonId
 
             // 季列表拉取失败但集拉到了：仍把集显示出来（否则用户会看到「该季暂无剧集」
             // 的假空态），此时没有季可选，集列表就是全部集。
@@ -429,7 +443,8 @@ public final class DetailViewModel {
             in: Self.season(withID: seasonId, in: content.seasons),
             from: allEpisodes
         )
-        if !cached.isEmpty {
+        // 缓存里有集，或者这一季已经被确认过是空的 → 直接用本地结果，不再发请求。
+        if !cached.isEmpty || fetchedSeasonIDs.contains(seasonId) {
             state = .loaded(content.replacingEpisodes(cached))
             return
         }
@@ -443,6 +458,7 @@ public final class DetailViewModel {
                 .sorted(by: Self.episodeOrder)
 
             allEpisodes = Self.merging(episodes: allEpisodes, with: fetched)
+            fetchedSeasonIDs.insert(seasonId)
 
             // 期间用户可能又切了季或整页重载，只有仍停在这一季时才落盘。
             guard case let .loaded(latest) = state, selectedSeasonId == seasonId else { return }

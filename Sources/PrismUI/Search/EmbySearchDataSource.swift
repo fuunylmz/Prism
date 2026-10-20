@@ -102,7 +102,8 @@ public struct EmbySearchDataSource: SearchDataSource, SearchImageProviding {
             }
         }
 
-        return SearchResponse(items: items, people: people)
+        // 带上服务端总命中数：单页最多 `limit` 条，不能拿本页条数当结果总数。
+        return SearchResponse(items: items, people: people, totalCount: page.totalRecordCount)
     }
 
     /// 解析条目 / 人物的图片地址。

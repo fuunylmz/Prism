@@ -259,7 +259,9 @@ public struct HomeView: View {
     private func continueWatchingSection(_ items: [MediaItem]) -> some View {
         RailScaffold(
             title: HomeSection.resume.title,
-            onSeeAll: { expandedSection = .resume }
+            // 用 toggle 而不是直接赋值：其余分区都能再点一次收起，
+            // 「继续观看」曾经只能展开、收不回去。
+            onSeeAll: { toggleExpanded(.resume) }
         ) {
             LazyHStack(alignment: .top, spacing: Spacing.lg) {
                 ForEach(items) { item in

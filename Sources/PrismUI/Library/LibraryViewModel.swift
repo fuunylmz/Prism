@@ -75,6 +75,12 @@ public final class LibraryViewModel {
     /// 搜索防抖时长（毫秒），与 UX 文档 §S14「输入 300ms 防抖请求」一致。
     public static let searchDebounceMilliseconds = 300
 
+    /// 筛选防抖时长（毫秒）。
+    ///
+    /// 评分滑块每 0.5 分触发一次变更，拖动一次会产生十几次回调。
+    /// 250ms 足够让人「停下来」再发请求，又不会觉得卡。
+    public static let filterDebounceMilliseconds = 250
+
     // MARK: 状态
 
     /// 当前加载状态。
@@ -151,6 +157,9 @@ public final class LibraryViewModel {
 
     /// 防抖用的搜索任务。
     @ObservationIgnored private var searchTask: Task<Void, Never>?
+
+    /// 防抖用的筛选任务。
+    @ObservationIgnored private var filterTask: Task<Void, Never>?
 
     // MARK: - 初始化
 
@@ -300,6 +309,9 @@ public final class LibraryViewModel {
 
     /// 应用新的排序方式：重置到第一页并清空已有数据。
     ///
+    /// 排序是**一次点击**、语义上整页重排，清屏是对的（骨架屏能说明「在重排」）。
+    /// 筛选不同，它来自连续拖动的滑块，所以那条路径保留画面（见 ``apply(filters:)``）。
+    ///
     /// - Parameter newSort: 新的排序方式。
     public func apply(sort newSort: SortOption) async {
         guard newSort != sort else { return }
@@ -307,17 +319,41 @@ public final class LibraryViewModel {
         await reloadFirstPage(clearing: true)
     }
 
-    /// 应用新的筛选条件：重置到第一页并清空已有数据。
+    /// 应用新的筛选条件：重置到第一页，但**保留当前画面**直到新结果到达。
+    ///
+    /// 为什么不清屏：筛选条上的评分滑块每 0.5 分就是一次变更，清屏会让整墙海报
+    /// 反复打回骨架屏（拖动一次闪十几下）。保留旧内容、只转小菊花，
+    /// 与 ⌘R 刷新同一套语义。
     ///
     /// - Parameter newFilters: 新的筛选条件。
     public func apply(filters newFilters: FilterSet) async {
         guard newFilters != filters else { return }
         filters = newFilters
-        await reloadFirstPage(clearing: true)
+        await reloadFirstPage(clearing: false)
+    }
+
+    /// 更新筛选条件（带防抖），供筛选条上的连续控件使用。
+    ///
+    /// 与 ``apply(filters:)`` 的分工：那个是「立即生效」，测试与一次性动作（清除筛选）
+    /// 用它；滑块 / 多选这类高频输入走这里，避免一次拖动连发十几个请求。
+    ///
+    /// - Parameter newFilters: 新的筛选条件。
+    public func scheduleFilters(_ newFilters: FilterSet) {
+        guard newFilters != filters else { return }
+        filters = newFilters
+
+        filterTask?.cancel()
+        filterTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.filterDebounceMilliseconds))
+            guard !Task.isCancelled, let self else { return }
+            await self.reloadFirstPage(clearing: false)
+        }
     }
 
     /// 清空全部筛选并重新加载。
     public func clearFilters() async {
+        filterTask?.cancel()
+        filterTask = nil
         await apply(filters: .none)
     }
 

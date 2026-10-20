@@ -95,6 +95,15 @@ public struct AppShellView: View {
         .overlay {
             playerOverlay
         }
+        // 登录后立刻预取媒体库列表。
+        //
+        // 侧边栏的「电影 / 剧集」用的是占位 id，真实 view id 只有 `/Views` 返回后
+        // 才知道。之前只有首页加载成功才回填，于是「登录 → 立刻按 ⌘2」会用
+        // `ParentId=library.movies` 查库，得到空库或错误页。这里在进入外壳时
+        // 就取一次，不依赖用户先去首页。
+        .task {
+            await prefetchLibraries()
+        }
         .animation(playerAnimation, value: model.isPlayerPresented)
         // 关闭播放器有三条路径：播放器内的返回按钮、Esc、⌘[。
         // 后两条只改 `isPlayerPresented`，不会走 `PlayerHost` 的返回回调，
@@ -102,6 +111,27 @@ public struct AppShellView: View {
         .onChange(of: model.isPlayerPresented) { _, isPresented in
             guard !isPresented else { return }
             Task { await playback.stop() }
+        }
+    }
+
+    // MARK: 媒体库预取
+
+    /// 预取 `/Users/{id}/Views` 并把真实 view id 注入导航模型。
+    ///
+    /// 失败静默：这只是提前量，首页自己的加载会再取一次。
+    private func prefetchLibraries() async {
+        guard let session, model.libraryRoutes.isEmpty else { return }
+
+        // 演示模式走内置数据源：它的 `client` 指向假地址，发真实请求必然失败。
+        let source: any HomeDataSource = session.isDemo
+            ? DemoDataSources.Home()
+            : session.homeDataSource
+        guard let views = try? await source.views() else { return }
+        for view in views {
+            model.registerLibraryRoute(
+                .library(id: view.id, type: LibraryKind(collectionType: view.collectionType)),
+                name: view.name
+            )
         }
     }
 

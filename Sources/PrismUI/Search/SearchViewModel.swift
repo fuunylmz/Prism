@@ -15,14 +15,22 @@ public struct SearchResponse: Sendable, Equatable {
     /// 人物。既可以是数据源单独查出来的，也可以是 ``items`` 里 `Type == Person` 的条目。
     public let people: [Person]
 
+    /// 服务端报告的总命中数（`TotalRecordCount`）。
+    ///
+    /// 单页最多返回 `limit` 条，所以「结果数」不能拿本页条数冒充：搜索「沙丘」
+    /// 命中 137 条时，界面曾经显示「共 60 个结果」。
+    public let totalCount: Int?
+
     /// 创建响应。
     ///
     /// - Parameters:
     ///   - items: 媒体条目。
     ///   - people: 人物。
-    public init(items: [MediaItem] = [], people: [Person] = []) {
+    ///   - totalCount: 服务端总命中数；`nil` 表示数据源没提供。
+    public init(items: [MediaItem] = [], people: [Person] = [], totalCount: Int? = nil) {
         self.items = items
         self.people = people
+        self.totalCount = totalCount
     }
 
     /// 是否没有任何结果。
@@ -114,16 +122,19 @@ public struct SearchResults: Sendable, Equatable {
     ///   - series: 剧集。
     ///   - episodes: 单集。
     ///   - people: 人物。
+    ///   - serverTotalCount: 服务端总命中数；`nil` 表示未知。
     public init(
         movies: [MediaItem] = [],
         series: [MediaItem] = [],
         episodes: [MediaItem] = [],
-        people: [Person] = []
+        people: [Person] = [],
+        serverTotalCount: Int? = nil
     ) {
         self.movies = movies
         self.series = series
         self.episodes = episodes
         self.people = people
+        self.serverTotalCount = serverTotalCount
     }
 
     /// 按原始响应分组。
@@ -179,6 +190,7 @@ public struct SearchResults: Sendable, Equatable {
             return (lhs.indexNumber ?? 0) < (rhs.indexNumber ?? 0)
         }
         self.people = people.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        self.serverTotalCount = response.totalCount
     }
 
     /// 是否一个结果都没有。
@@ -186,9 +198,28 @@ public struct SearchResults: Sendable, Equatable {
         movies.isEmpty && series.isEmpty && episodes.isEmpty && people.isEmpty
     }
 
-    /// 结果总数（四组之和）。
+    /// 本页已加载的结果总数（四组之和）。
     public var totalCount: Int {
         movies.count + series.count + episodes.count + people.count
+    }
+
+    /// 服务端报告的总命中数；`nil` 表示数据源没提供。
+    public let serverTotalCount: Int?
+
+    /// 是否还有未加载的结果（服务端总数大于本页条数）。
+    ///
+    /// 为 `true` 时界面显示「共 N+ 个结果」，避免把 60 条的分页上限说成总数。
+    public var isTruncated: Bool {
+        guard let serverTotalCount else { return false }
+        return serverTotalCount > totalCount
+    }
+
+    /// 展示用的结果数文案。
+    public var totalCountText: String {
+        if isTruncated, let serverTotalCount {
+            return "\(serverTotalCount)+"
+        }
+        return "\(totalCount)"
     }
 
     /// 媒体条目总数（不含人物）。
