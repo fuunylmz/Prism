@@ -253,7 +253,7 @@ public struct TranscodingProfile: Sendable, Codable, Hashable {
     /// 输出音频编码。
     public var audioCodec: String?
     /// 传输协议（`hls` / `http`）。
-    public var `protocol`: String?
+    public var protocolName: String?
     /// 转码上下文（`Streaming` / `Static`）。
     public var context: EncodingContext?
     /// 最大声道数。**注意是字符串**（服务端 schema 就是 `string`）。
@@ -313,7 +313,7 @@ public struct TranscodingProfile: Sendable, Codable, Hashable {
         type: DlnaProfileType? = nil,
         videoCodec: String? = nil,
         audioCodec: String? = nil,
-        protocol: String? = nil,
+        protocolName: String? = nil,
         context: EncodingContext? = nil,
         maxAudioChannels: String? = nil,
         minSegments: Int? = nil,
@@ -334,7 +334,7 @@ public struct TranscodingProfile: Sendable, Codable, Hashable {
         self.type = type
         self.videoCodec = videoCodec
         self.audioCodec = audioCodec
-        self.protocol = `protocol`
+        self.protocolName = protocolName
         self.context = context
         self.maxAudioChannels = maxAudioChannels
         self.minSegments = minSegments
@@ -357,7 +357,7 @@ public struct TranscodingProfile: Sendable, Codable, Hashable {
         case type = "Type"
         case videoCodec = "VideoCodec"
         case audioCodec = "AudioCodec"
-        case protocol = "Protocol"
+        case protocolName = "Protocol"
         case context = "Context"
         case maxAudioChannels = "MaxAudioChannels"
         case minSegments = "MinSegments"
@@ -385,7 +385,7 @@ public struct TranscodingProfile: Sendable, Codable, Hashable {
         self.type = rawType.isEmpty ? nil : DlnaProfileType(rawValue: rawType)
         self.videoCodec = container.embyString(forKey: .videoCodec)
         self.audioCodec = container.embyString(forKey: .audioCodec)
-        self.protocol = container.embyString(forKey: .protocol)
+        self.protocolName = container.embyString(forKey: .protocolName)
         let rawContext = container.embyString(forKey: .context) ?? ""
         self.context = rawContext.isEmpty ? nil : EncodingContext(rawValue: rawContext)
         self.maxAudioChannels = container.embyString(forKey: .maxAudioChannels)
@@ -414,7 +414,7 @@ public struct TranscodingProfile: Sendable, Codable, Hashable {
         try container.encodeIfPresent(type?.rawValue, forKey: .type)
         try container.encodeIfPresent(videoCodec, forKey: .videoCodec)
         try container.encodeIfPresent(audioCodec, forKey: .audioCodec)
-        try container.encodeIfPresent(`protocol`, forKey: .protocol)
+        try container.encodeIfPresent(protocolName, forKey: .protocolName)
         try container.encodeIfPresent(context?.rawValue, forKey: .context)
         try container.encodeIfPresent(maxAudioChannels, forKey: .maxAudioChannels)
         try container.encodeIfPresent(minSegments, forKey: .minSegments)
@@ -665,7 +665,7 @@ public struct SubtitleProfile: Sendable, Codable, Hashable {
     /// 是否允许分块响应。
     public var allowChunkedResponse: Bool?
     /// 协议。
-    public var `protocol`: String?
+    public var protocolName: String?
 
     /// 完整初始化。
     ///
@@ -684,7 +684,7 @@ public struct SubtitleProfile: Sendable, Codable, Hashable {
         language: String? = nil,
         container: String? = nil,
         allowChunkedResponse: Bool? = nil,
-        protocol: String? = nil
+        protocolName: String? = nil
     ) {
         self.format = format
         self.method = method
@@ -692,7 +692,7 @@ public struct SubtitleProfile: Sendable, Codable, Hashable {
         self.language = language
         self.container = container
         self.allowChunkedResponse = allowChunkedResponse
-        self.protocol = `protocol`
+        self.protocolName = protocolName
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -702,7 +702,7 @@ public struct SubtitleProfile: Sendable, Codable, Hashable {
         case language = "Language"
         case container = "Container"
         case allowChunkedResponse = "AllowChunkedResponse"
-        case protocol = "Protocol"
+        case protocolName = "Protocol"
     }
 
     /// 宽松解码。
@@ -717,7 +717,7 @@ public struct SubtitleProfile: Sendable, Codable, Hashable {
         self.language = container.embyString(forKey: .language)
         self.container = container.embyString(forKey: .container)
         self.allowChunkedResponse = container.embyBool(forKey: .allowChunkedResponse)
-        self.protocol = container.embyString(forKey: .protocol)
+        self.protocolName = container.embyString(forKey: .protocolName)
     }
 
     /// 编码为 PascalCase。
@@ -731,7 +731,7 @@ public struct SubtitleProfile: Sendable, Codable, Hashable {
         try container.encodeIfPresent(language, forKey: .language)
         try container.encodeIfPresent(self.container, forKey: .container)
         try container.encodeIfPresent(allowChunkedResponse, forKey: .allowChunkedResponse)
-        try container.encodeIfPresent(`protocol`, forKey: .protocol)
+        try container.encodeIfPresent(protocolName, forKey: .protocolName)
     }
 }
 
@@ -1055,7 +1055,7 @@ public extension DeviceProfile {
                     type: .video,
                     videoCodec: "h264",
                     audioCodec: "aac",
-                    protocol: "hls",
+                    protocolName: "hls",
                     context: .streaming,
                     maxAudioChannels: "6",
                     minSegments: 1,
@@ -1068,7 +1068,7 @@ public extension DeviceProfile {
                     type: .video,
                     videoCodec: "h264",
                     audioCodec: "aac",
-                    protocol: "http",
+                    protocolName: "http",
                     context: .streaming,
                     maxAudioChannels: "6"
                 ),
@@ -1076,7 +1076,7 @@ public extension DeviceProfile {
                     container: "ts",
                     type: .audio,
                     audioCodec: "aac",
-                    protocol: "hls",
+                    protocolName: "hls",
                     context: .streaming,
                     maxAudioChannels: "2",
                     minSegments: 1,
@@ -1087,7 +1087,7 @@ public extension DeviceProfile {
                     container: "mp3",
                     type: .audio,
                     audioCodec: "mp3",
-                    protocol: "http",
+                    protocolName: "http",
                     context: .streaming,
                     maxAudioChannels: "2"
                 )

@@ -80,7 +80,7 @@ public struct ServerProbe: Sendable {
 
         let info: PublicServerInfo
         do {
-            info = try EmbyJSON.decode(PublicServerInfo.self, from: data)
+            info = try EmbyJSON.decode(PublicServerInfo.self, from: Self.trimPadding(data))
         } catch {
             throw EmbyError.decoding(String(describing: error))
         }
@@ -105,5 +105,19 @@ public struct ServerProbe: Sendable {
         components.query = nil
         components.fragment = nil
         return components.url
+    }
+
+    /// 裁掉响应体首尾的空白与 NUL 填充。
+    ///
+    /// 正常 Emby 服务器不会给响应体补 `\0`，但反向代理或某些中间层会（与 UDP 报文
+    /// 同理）。`JSONDecoder` 容忍首尾空白却不容忍 `\0`，不裁的话会误判成「不是 Emby」。
+    ///
+    /// - Parameter data: 原始响应体。
+    /// - Returns: 裁剪后的响应体。
+    private static func trimPadding(_ data: Data) -> Data {
+        func isPadding(_ byte: UInt8) -> Bool {
+            byte == 0x00 || byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
+        }
+        return Data(data.drop(while: isPadding).reversed().drop(while: isPadding).reversed())
     }
 }

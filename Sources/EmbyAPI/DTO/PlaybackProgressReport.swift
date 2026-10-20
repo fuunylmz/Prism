@@ -513,12 +513,15 @@ public struct RepeatMode: EmbyStringEnum {
         self.rawValue = rawValue
     }
 
-    /// 不循环。
-    public static let none = RepeatMode(rawValue: "RepeatNone")
+    /// 不循环（`RepeatNone`）。
+    ///
+    /// - Note: 刻意不叫 `none`：那会和 `Optional.none` 撞名，
+    ///   让 `report.repeatMode = .none` 静默解析成「把字段设成 nil」。
+    public static let repeatNone = RepeatMode(rawValue: "RepeatNone")
     /// 列表循环。
-    public static let all = RepeatMode(rawValue: "RepeatAll")
+    public static let repeatAll = RepeatMode(rawValue: "RepeatAll")
     /// 单曲循环。
-    public static let one = RepeatMode(rawValue: "RepeatOne")
+    public static let repeatOne = RepeatMode(rawValue: "RepeatOne")
 }
 
 /// 睡眠定时模式，对应 `SleepTimerMode`。
@@ -535,8 +538,10 @@ public struct SleepTimerMode: EmbyStringEnum {
         self.rawValue = rawValue
     }
 
-    /// 未启用。
-    public static let none = SleepTimerMode(rawValue: "None")
+    /// 未启用（`None`）。
+    ///
+    /// - Note: 刻意不叫 `none`，理由同 ``RepeatMode/repeatNone``（避免与 `Optional.none` 撞名）。
+    public static let off = SleepTimerMode(rawValue: "None")
     /// 当前条目结束后。
     public static let afterItem = SleepTimerMode(rawValue: "AfterItem")
     /// 指定时刻。

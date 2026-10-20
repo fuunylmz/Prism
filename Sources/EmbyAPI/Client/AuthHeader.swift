@@ -76,19 +76,24 @@ public struct AuthHeader: Sendable, Hashable {
     ///   - userId: 当前登录用户 id；`nil` 或空串时省略 `UserId=`。
     ///   - token: 访问令牌；`nil` 或空串时省略 `Token=`。
     /// - Returns: 形如 `Emby UserId="u1", Client="Prism", ...` 的字符串。
+    ///
+    /// - Important: 首词 `Emby` 与后续字段之间是**空格**，字段之间才是「逗号 + 空格」。
+    ///   把所有部分一起 `joined(separator: ", ")` 会得到 `Emby, UserId="..."` —— 多一个逗号，
+    ///   服务端会把 scheme 解析成 `Emby,`。`docs/research/emby-api.md` §2.1 的示例代码
+    ///   就有这个问题，这里按官方 schema 原文修正。
     public func headerValue(userId: String?, token: String?) -> String {
-        var parts: [String] = ["Emby"]
+        var fields: [String] = []
         if let userId, !userId.isEmpty {
-            parts.append("UserId=\"\(Self.sanitized(userId))\"")
+            fields.append("UserId=\"\(Self.sanitized(userId))\"")
         }
-        parts.append("Client=\"\(Self.sanitized(client))\"")
-        parts.append("Device=\"\(Self.sanitized(device))\"")
-        parts.append("DeviceId=\"\(Self.sanitized(deviceId))\"")
-        parts.append("Version=\"\(Self.sanitized(version))\"")
+        fields.append("Client=\"\(Self.sanitized(client))\"")
+        fields.append("Device=\"\(Self.sanitized(device))\"")
+        fields.append("DeviceId=\"\(Self.sanitized(deviceId))\"")
+        fields.append("Version=\"\(Self.sanitized(version))\"")
         if let token, !token.isEmpty {
-            parts.append("Token=\"\(Self.sanitized(token))\"")
+            fields.append("Token=\"\(Self.sanitized(token))\"")
         }
-        return parts.joined(separator: ", ")
+        return "Emby " + fields.joined(separator: ", ")
     }
 
     /// 去掉会破坏 `Key="value"` 结构的字符。
@@ -97,6 +102,11 @@ public struct AuthHeader: Sendable, Hashable {
     /// 拆成错误的键值对。这里直接移除反斜杠与双引号、把换行折成空格：
     /// Emby 的服务端解析器没有公开的反转义规则（【待验证】），
     /// 因此选择「丢弃」而不是「转义」，保证头永远合法。
+    ///
+    /// - Note: 中文设备名（如 `fuunylmz的Mac Mini`）**不转码**。本机实测
+    ///   `URLSession` 会把非 ASCII 字符按 UTF-8 原样放进头值（见 `.spike/header` 探针），
+    ///   而真实 Emby（ASP.NET Core）如何解码非 ASCII 头值尚未验证 —— 【待验证】。
+    ///   验证方法：在设备名含中文的 Mac 上连真实服务器，看 Dashboard → Devices 里的名字。
     ///
     /// - Parameter raw: 原始字段值。
     /// - Returns: 可安全嵌入引号内的值。

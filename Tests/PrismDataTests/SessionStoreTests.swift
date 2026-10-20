@@ -121,6 +121,19 @@ struct SessionStoreTests {
         #expect(try await store.session(serverId: "srv-b", userId: "bob") == nil)
     }
 
+    @Test("无论多少个会话，Keychain 里始终只有一条 item")
+    func singleKeychainItemForAllSessions() async throws {
+        let (store, secure) = makeStore()
+        try await store.save(makeSession(serverId: "srv-a", userId: "alice"))
+        try await store.save(makeSession(serverId: "srv-b", userId: "alice"))
+        try await store.save(makeSession(serverId: "srv-b", userId: "bob"))
+        try await store.setActive(serverId: "srv-b", userId: "bob")
+
+        // 存储形态是「一个 JSON blob」，不是每字段/每服务器一条 item
+        #expect(secure.count == 1)
+        #expect(try await store.loadAll().count == 3)
+    }
+
     @Test("删除单个会话不影响同服务器上的其他用户")
     func removeSingleUserKeepsOthers() async throws {
         let (store, _) = makeStore()

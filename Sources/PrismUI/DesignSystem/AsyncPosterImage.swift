@@ -138,6 +138,7 @@ public struct AsyncPosterImage: View {
     private let targetSize: CGSize
     private let contentMode: ContentMode
     private let showsSkeleton: Bool
+    private let placeholderText: String?
 
     @Environment(\.posterImageLoader) private var loader
     @State private var phase: Phase
@@ -149,16 +150,21 @@ public struct AsyncPosterImage: View {
     ///   - targetSize: 传给加载器的期望尺寸，默认 300×450（2:3）。
     ///   - contentMode: 图片填充方式，默认 `.fill`（配合父容器的 `clipped()`）。
     ///   - showsSkeleton: 加载中是否显示骨架块；`false` 时显示小菊花。
+    ///   - placeholderText: 占位图上显示的文字（通常传标题首字）。
+    ///     对应 UX 文档 S05「部分失败（图片）：海报占位 = 标题首字 + 取色背景」；
+    ///     `nil` 时只显示图片符号。
     public init(
         url: URL?,
         targetSize: CGSize = CGSize(width: 300, height: 450),
         contentMode: ContentMode = .fill,
-        showsSkeleton: Bool = true
+        showsSkeleton: Bool = true,
+        placeholderText: String? = nil
     ) {
         self.url = url
         self.targetSize = targetSize
         self.contentMode = contentMode
         self.showsSkeleton = showsSkeleton
+        self.placeholderText = placeholderText
         _phase = State(initialValue: url == nil ? .failure : .loading)
     }
 
@@ -196,7 +202,7 @@ public struct AsyncPosterImage: View {
         )
     }
 
-    /// 加载失败 / 无图时的占位：淡淡的底 + 图片符号，避免出现「一块空白」。
+    /// 加载失败 / 无图时的占位：淡淡的底 + 首字（或图片符号），避免出现「一块空白」。
     private var placeholder: some View {
         ZStack {
             LinearGradient(
@@ -204,9 +210,16 @@ public struct AsyncPosterImage: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 26, weight: .light))
-                .foregroundStyle(Palette.textSecondary)
+
+            if let placeholderText, let initial = placeholderText.first {
+                Text(String(initial))
+                    .font(.system(size: 34, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Palette.textSecondary.opacity(0.55))
+            } else {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.system(size: 26, weight: .light))
+                    .foregroundStyle(Palette.textSecondary)
+            }
         }
         .accessibilityHidden(true)
     }

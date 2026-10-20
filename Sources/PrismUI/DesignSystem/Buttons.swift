@@ -73,13 +73,17 @@ public struct PrismPrimaryButton: View {
         .opacity(isEnabled ? 1 : 0.45)
     }
 
-    /// 强调色上的文字色：按相对亮度阈值（WCAG 0.179）选黑或白。
+    /// 强调色上的文字色。
+    ///
+    /// 用线性 sRGB 相对亮度做启发式判断：系统强调色可被用户改成黄色/绿色，
+    /// 固定白字会失去对比度。阈值取 0.35（而不是 WCAG 黑白等对比点 0.179），
+    /// 是为了让系统蓝/紫/红/粉仍保持惯用的白字，只把橙/黄/绿切到黑字。
     private var foreground: Color {
         let resolved = Palette.accent.resolve(in: environment)
         let luminance = 0.2126 * Double(resolved.linearRed)
             + 0.7152 * Double(resolved.linearGreen)
             + 0.0722 * Double(resolved.linearBlue)
-        return luminance > 0.179 ? .black : .white
+        return luminance > 0.35 ? .black : .white
     }
 }
 
@@ -244,8 +248,6 @@ private struct PrismFocusRing: ViewModifier {
 // MARK: - 预览
 
 private struct ButtonsPreviewBoard: View {
-    @State private var isDisabled = false
-
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xl) {
             Text("Buttons").font(Typography.title)

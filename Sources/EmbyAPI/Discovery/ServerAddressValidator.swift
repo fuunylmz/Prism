@@ -127,7 +127,6 @@ public enum ServerAddressValidator {
             text = String(text[..<slash])
         }
         path = normalizedPath(path)
-
         // 5) host / port
         guard let hostPort = splitHostPort(text) else { return nil }
         // 主机名大小写不敏感，统一小写，避免同一台服务器因大小写产生两条记录。
@@ -163,7 +162,10 @@ public enum ServerAddressValidator {
         if explicitPort != nil || !hadExplicitScheme {
             components.port = port
         }
-        components.percentEncodedPath = path
+        // ⚠️ 必须用编码后的路径：`percentEncodedPath` 的 setter 对含空格 / 非 ASCII
+        // 的字符串会直接触发 Foundation 断言崩溃（不是抛错），用户粘贴
+        // `http://host/my emby` 就能让 App 崩掉。
+        components.percentEncodedPath = percentEncode(path: path)
 
         guard let url = components.url, url.host() != nil else { return nil }
         return Parsed(url: url, scheme: scheme, host: host, port: port, path: path)
@@ -198,7 +200,7 @@ public enum ServerAddressValidator {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// 把路径前缀归一化：去掉所有尾部 `/`，保证以 `/` 开头（或为空串）。
+    /// 把路径归一化：去掉所有尾部 `/`，保证以 `/` 开头（或为空串）。
     ///
     /// - Parameter raw: 原始路径（可能为空）。
     /// - Returns: `""` 或 `"/emby"` 这样的规范形式。
@@ -208,6 +210,51 @@ public enum ServerAddressValidator {
         guard !path.isEmpty else { return "" }
         if !path.hasPrefix("/") { path = "/" + path }
         return path
+    }
+
+    /// 把任意路径编码成合法的 percent-encoded 路径，**保留已有的 `%XX` 转义**。
+    ///
+    /// 为什么需要它：`URLComponents.percentEncodedPath` 的 setter 会校验字符串，
+    /// 含空格或非 ASCII 时直接 `fatalError`（实测崩溃，见 `DiscoveryAddressValidatorTests`）。
+    /// 先用 `path` setter 编码会把用户已经写好的 `%20` 二次编码成 `%2520`，同样不对，
+    /// 所以这里自己做：只编码需要编码的字符，合法的转义原样保留。
+    ///
+    /// - Parameter path: 原始路径（`""` 或 `/` 开头）。
+    /// - Returns: 只含 URI 路径合法字符的字符串。
+    private static func percentEncode(path: String) -> String {
+        guard !path.isEmpty else { return "" }
+
+        // 先把 `%` 排除在允许集合外，单独按「合法转义 / 裸百分号」判断。
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "%")
+
+        var result = ""
+        var pending = ""
+        func flushPending() {
+            guard !pending.isEmpty else { return }
+            result += pending.addingPercentEncoding(withAllowedCharacters: allowed) ?? pending
+            pending = ""
+        }
+
+        let characters = Array(path)
+        var index = 0
+        while index < characters.count {
+            let character = characters[index]
+            let isEscape = character == "%"
+                && index + 2 < characters.count
+                && characters[index + 1].isHexDigit
+                && characters[index + 2].isHexDigit
+            if isEscape {
+                flushPending()
+                result.append(contentsOf: characters[index...(index + 2)])
+                index += 3
+                continue
+            }
+            pending.append(character)
+            index += 1
+        }
+        flushPending()
+        return result
     }
 
     /// 从 `host[:port]` / `[v6][:port]` 中拆出主机与端口原文。
@@ -251,6 +298,10 @@ public enum ServerAddressValidator {
     /// 只做「明显不可能」的排除：空白、URL 保留字符、空标签。
     /// 不做 DNS 解析——那是 ``ServerProbe`` 的事。
     ///
+    /// 刻意**不接受 IDN（中文域名）**：媒体服务器的地址几乎不可能是中文域名，
+    /// 出现非 ASCII 字符基本等于输错或粘贴了乱码，此时立刻报「地址无效」
+    /// 比让用户等一次 DNS 超时体验更好。确有 IDN 需求时填 punycode（`xn--…`）即可。
+    ///
     /// - Parameter host: 主机部分（IPv6 不带方括号）。
     /// - Returns: 是否可接受。
     private static func isValidHost(_ host: String) -> Bool {
@@ -258,17 +309,16 @@ public enum ServerAddressValidator {
 
         // IPv6 字面量：只允许十六进制、冒号、`%zone`。
         if host.contains(":") {
-            let allowed = CharacterSet(charactersIn: "0123456789abcdefABCDEF:.%")
+            let allowed = CharacterSet(charactersIn: "0123456789abcdef:.%")
             let colons = host.filter { $0 == ":" }.count
             return colons >= 2 && host.unicodeScalars.allSatisfy(allowed.contains)
         }
 
-        // 主机名 / IPv4：排除 URL 保留字符与空白。
-        let forbidden = CharacterSet(charactersIn: " /\\?#@&=+;,<>\"'`|^!*()[]{}%$~:")
-        guard host.unicodeScalars.allSatisfy({ !forbidden.contains($0) && !CharacterSet.whitespacesAndNewlines.contains($0) })
-        else { return false }
+        // 主机名 / IPv4：只允许 ASCII 字母数字与 `-` `.` `_`。
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-._")
+        guard host.unicodeScalars.allSatisfy(allowed.contains) else { return false }
 
-        // 至少含一个字母或数字（允许非 ASCII 的 IDN 字符）。
-        return host.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) || $0.value > 0x7F }
+        // 至少含一个字母或数字，排除 `.`、`...`、`-` 这类纯符号输入。
+        return host.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
     }
 }

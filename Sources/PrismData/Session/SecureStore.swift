@@ -288,7 +288,7 @@ public final class KeychainSecureStore: SecureStoring, @unchecked Sendable {
 
             var status = SecItemAdd(addQuery as CFDictionary, nil)
             if status == errSecDuplicateItem {
-                var matchQuery = self.baseQuery(account: account, service: service, kind: kind)
+                let matchQuery = self.baseQuery(account: account, service: service, kind: kind)
                 var attributes: [String: Any] = [kSecValueData as String: data]
                 if kind == .dataProtection {
                     attributes[kSecAttrAccessible as String] = self.accessibility.constant

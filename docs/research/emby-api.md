@@ -143,19 +143,24 @@ enum EmbyAuthHeader {
                       version: String,
                       userId: String? = nil,
                       token: String? = nil) -> String {
-        var parts = ["Emby"]
-        if let userId { parts.append("UserId=\"\(userId)\"") }
-        parts.append("Client=\"\(client)\"")
-        parts.append("Device=\"\(device)\"")
-        parts.append("DeviceId=\"\(deviceId)\"")
-        parts.append("Version=\"\(version)\"")
-        if let token { parts.append("Token=\"\(token)\"") }
-        return parts.joined(separator: ", ")
+        // ⚠️ 协议名 `Emby` 与字段之间是**空格**，字段之间才是 `, `。
+        // 曾经写在这里的错误示范：把 "Emby" 也放进数组再统一用 ", " 拼接，
+        // 会产出 `Emby, UserId="..."`，服务端会把 scheme 解析成 `Emby,`。
+        // 由 T1.2 传输层代理抓出并修正。
+        var fields: [String] = []
+        if let userId { fields.append("UserId=\"\(userId)\"") }
+        fields.append("Client=\"\(client)\"")
+        fields.append("Device=\"\(device)\"")
+        fields.append("DeviceId=\"\(deviceId)\"")
+        fields.append("Version=\"\(version)\"")
+        if let token { fields.append("Token=\"\(token)\"") }
+        return "Emby " + fields.joined(separator: ", ")
     }
 }
 ```
 
-> ⚠️ 注意分隔符是 **逗号 + 空格**，且整个值**不要**加外层引号。
+> ⚠️ 两处分隔符不同：**协议名之后是空格**，**字段之间是逗号 + 空格**，且整个值**不要**加外层引号。
+> 建议实现后用 `header.hasPrefix("Emby ")` 做一次断言（T1.2 的单测就是这么抓到 bug 的）。
 
 ### 2.2 用户登录 ✅
 

@@ -1,4 +1,5 @@
 import Foundation
+import PrismCore
 
 /// Emby 的「字符串枚举」统一基座。
 ///

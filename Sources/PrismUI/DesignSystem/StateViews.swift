@@ -430,14 +430,14 @@ private struct StateContentLayout<Actions: View>: View {
 }
 
 #Preview("错误态 · 深色") {
-    ErrorStateView(error: .serverUnreachable("连接被拒绝")) {}
+    ErrorStateView(error: .serverUnreachable("连接被拒绝"), onRetry: {})
         .prismTheme(PrismTheme(appearance: .dark))
         .background(Palette.surface)
         .frame(width: 520, height: 360)
 }
 
 #Preview("错误态 · 浅色") {
-    ErrorStateView(error: .timeout, showsTechnicalDetail: true) {}
+    ErrorStateView(error: .timeout, onRetry: {}, showsTechnicalDetail: true)
         .prismTheme(PrismTheme(appearance: .light))
         .background(Palette.surface)
         .frame(width: 520, height: 400)

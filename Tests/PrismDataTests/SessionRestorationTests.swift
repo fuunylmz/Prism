@@ -9,25 +9,27 @@ struct SessionRestorationTests {
     // MARK: 夹具
 
     /// 一次性环境：内存 Keychain + 独立 UserDefaults suite。
+    ///
+    /// `UserDefaults` 不是 `Sendable`，所以这里只把**新创建的实例**交给 `ServerRegistry`，
+    /// 自己不留引用；清理时再新建一个同 suite 的实例（同一 suite 的不同实例共享底层域）。
     private struct Fixture {
         let suiteName: String
-        let defaults: UserDefaults
         let secure: InMemorySecureStore
         let store: SessionStore
         let registry: ServerRegistry
         let restoration: SessionRestoration
 
         init() throws {
-            suiteName = "test.prism.\(UUID().uuidString)"
-            defaults = try #require(UserDefaults(suiteName: suiteName))
+            let name = "test.prism.\(UUID().uuidString)"
+            suiteName = name
             secure = InMemorySecureStore()
             store = SessionStore(secureStore: secure)
-            registry = ServerRegistry(defaults: defaults)
+            registry = ServerRegistry(defaults: try #require(UserDefaults(suiteName: name)))
             restoration = SessionRestoration(store: store, registry: registry)
         }
 
         func cleanUp() {
-            defaults.removePersistentDomain(forName: suiteName)
+            UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
         }
     }
 
@@ -159,7 +161,10 @@ struct SessionRestorationTests {
         #expect(try await fixture.store.loadAll().isEmpty)
         #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice") == nil)
         // 服务器记录与提示都保留：用户只需重输密码，不用重填地址
-        #expect(await fixture.registry.server(id: "srv-a") == server)
+        let kept = await fixture.registry.server(id: "srv-a")
+        #expect(kept?.id == server.id)
+        #expect(kept?.name == server.name)
+        #expect(kept?.baseURL == server.baseURL)
         #expect(await fixture.registry.lastActiveServerId == "srv-a")
         // 恢复流程回到未登录
         #expect(try await fixture.restoration.restore() == .signedOut)

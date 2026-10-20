@@ -7,23 +7,30 @@ import PrismCore
 ///
 /// 每个用例都用**独立 suite** 的 `UserDefaults`，并在结束时 `removePersistentDomain`，
 /// 绝不污染真实的 `.standard` 域（否则开发机的 Prism 偏好会被测试数据搞脏）。
+///
+/// 注意每个 `ServerRegistry` 都拿**新创建**的 `UserDefaults` 实例：`UserDefaults`
+/// 不是 `Sendable`，把同一个实例既交给 actor 又在测试里继续使用会被 Swift 6 的
+/// 区域隔离判定为数据竞争。同一 suite 的不同实例共享底层域（已实测），因此读写互通。
 @Suite("ServerRegistry", .serialized)
 struct SessionRegistryTests {
     // MARK: 夹具
 
-    /// 一次性的 `UserDefaults` 容器。
-    private struct TestDefaults {
-        let suiteName: String
-        let defaults: UserDefaults
+    /// 一次性的 `UserDefaults` 域。
+    private struct TestSuite {
+        let name: String
 
-        init() throws {
-            suiteName = "test.prism.\(UUID().uuidString)"
-            defaults = try #require(UserDefaults(suiteName: suiteName))
+        init() {
+            name = "test.prism.\(UUID().uuidString)"
+        }
+
+        /// 每次调用都返回新实例，避免与 actor 共享引用。
+        func defaults() throws -> UserDefaults {
+            try #require(UserDefaults(suiteName: name))
         }
 
         /// 从磁盘和内存里移除整个域。
         func cleanUp() {
-            defaults.removePersistentDomain(forName: suiteName)
+            UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
         }
     }
 
@@ -41,9 +48,9 @@ struct SessionRegistryTests {
 
     @Test("初始为空")
     func startsEmpty() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        let registry = ServerRegistry(defaults: try suite.defaults())
 
         #expect(await registry.servers().isEmpty)
         #expect(await registry.lastActiveServerId == nil)
@@ -52,9 +59,9 @@ struct SessionRegistryTests {
 
     @Test("upsert 新增后可按 id 查回")
     func upsertAndLookup() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        let registry = ServerRegistry(defaults: try suite.defaults())
         let connection = try makeConnection(id: "srv-a", name: "客厅")
 
         await registry.upsert(connection)
@@ -65,9 +72,9 @@ struct SessionRegistryTests {
 
     @Test("同 id 的 upsert 是更新，不是追加")
     func upsertDeduplicatesById() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        let registry = ServerRegistry(defaults: try suite.defaults())
 
         await registry.upsert(try makeConnection(id: "srv-a", name: "旧名字"))
         await registry.upsert(try makeConnection(id: "srv-a", name: "新名字"))
@@ -79,9 +86,9 @@ struct SessionRegistryTests {
 
     @Test("排序：最近使用的排最前，从未连上的排最后")
     func sortsByRecentUse() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        let registry = ServerRegistry(defaults: try suite.defaults())
 
         await registry.upsert(try makeConnection(id: "old", name: "Old", lastConnectedAt: Date(timeIntervalSince1970: 100)))
         await registry.upsert(try makeConnection(id: "never", name: "Never"))
@@ -95,9 +102,9 @@ struct SessionRegistryTests {
 
     @Test("markUsed 更新连接时间并记住上次激活的服务器")
     func markUsedUpdatesTimeAndActive() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        let registry = ServerRegistry(defaults: try suite.defaults())
         await registry.upsert(try makeConnection(id: "srv-a"))
         await registry.upsert(try makeConnection(id: "srv-b"))
 
@@ -113,9 +120,9 @@ struct SessionRegistryTests {
 
     @Test("markUsed 指向未登记的服务器时返回 false 且不写入")
     func markUsedUnknownReturnsFalse() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        let registry = ServerRegistry(defaults: try suite.defaults())
 
         let found = await registry.markUsed(id: "ghost")
 
@@ -125,9 +132,9 @@ struct SessionRegistryTests {
 
     @Test("setLastActiveServerId 可写可清")
     func setLastActiveServerId() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        let registry = ServerRegistry(defaults: try suite.defaults())
 
         await registry.setLastActiveServerId("srv-a")
         #expect(await registry.lastActiveServerId == "srv-a")
@@ -144,9 +151,9 @@ struct SessionRegistryTests {
 
     @Test("remove 删掉指定服务器，其他保留")
     func removeOne() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        let registry = ServerRegistry(defaults: try suite.defaults())
         await registry.upsert(try makeConnection(id: "srv-a"))
         await registry.upsert(try makeConnection(id: "srv-b"))
 
@@ -159,9 +166,9 @@ struct SessionRegistryTests {
 
     @Test("删掉正好是「上次激活」的服务器时，标记一起清掉")
     func removeActiveClearsHint() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        let registry = ServerRegistry(defaults: try suite.defaults())
         await registry.upsert(try makeConnection(id: "srv-a"))
         await registry.markUsed(id: "srv-a")
 
@@ -172,9 +179,9 @@ struct SessionRegistryTests {
 
     @Test("remove 不存在的 id 不报错")
     func removeUnknownIsNoOp() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        let registry = ServerRegistry(defaults: try suite.defaults())
         await registry.upsert(try makeConnection(id: "srv-a"))
 
         await registry.remove(id: "ghost")
@@ -184,9 +191,9 @@ struct SessionRegistryTests {
 
     @Test("removeAll 清空列表与激活标记")
     func removeAll() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        let registry = ServerRegistry(defaults: try suite.defaults())
         await registry.upsert(try makeConnection(id: "srv-a"))
         await registry.markUsed(id: "srv-a")
 
@@ -200,16 +207,16 @@ struct SessionRegistryTests {
 
     @Test("模拟重启：新实例从同一 suite 读回数据")
     func survivesInstanceRecreation() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
         let connection = try makeConnection(id: "srv-a", name: "书房")
         let stamp = Date(timeIntervalSince1970: 555)
 
-        let first = ServerRegistry(defaults: fixture.defaults)
+        let first = ServerRegistry(defaults: try suite.defaults())
         await first.upsert(connection)
         await first.markUsed(id: "srv-a", at: stamp)
 
-        let second = ServerRegistry(defaults: fixture.defaults)
+        let second = ServerRegistry(defaults: try suite.defaults())
 
         #expect(await second.servers().count == 1)
         #expect(await second.server(id: "srv-a")?.name == "书房")
@@ -219,13 +226,13 @@ struct SessionRegistryTests {
 
     @Test("数据损坏时退化为空列表，不抛错也不崩")
     func corruptedDataFallsBackToEmpty() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
-        fixture.defaults.set(
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
+        try suite.defaults().set(
             Data("这不是 JSON".utf8),
             forKey: ServerRegistry.defaultServersKey
         )
-        let registry = ServerRegistry(defaults: fixture.defaults)
+        let registry = ServerRegistry(defaults: try suite.defaults())
 
         #expect(await registry.servers().isEmpty)
         // 仍然可以继续写入，覆盖掉坏数据
@@ -235,14 +242,14 @@ struct SessionRegistryTests {
 
     @Test("自定义键名与默认键名互不干扰")
     func customKeysAreIsolated() async throws {
-        let fixture = try TestDefaults()
-        defer { fixture.cleanUp() }
+        let suite = TestSuite()
+        defer { suite.cleanUp() }
         let custom = ServerRegistry(
-            defaults: fixture.defaults,
+            defaults: try suite.defaults(),
             serversKey: "custom.servers",
             activeServerKey: "custom.active"
         )
-        let standard = ServerRegistry(defaults: fixture.defaults)
+        let standard = ServerRegistry(defaults: try suite.defaults())
 
         await custom.upsert(try makeConnection(id: "srv-a"))
 

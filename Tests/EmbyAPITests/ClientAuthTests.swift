@@ -7,19 +7,22 @@ import Testing
 @Suite("鉴权头与令牌")
 struct ClientAuthTests {
     /// 期望值的拼装器（避免手写超长转义字符串时看错字段）。
+    ///
+    /// 注意首词 `Emby` 与字段之间是空格，字段之间才是「逗号 + 空格」——
+    /// 这里刻意不复用被测代码的拼装方式，而是按官方 schema 原文逐字拼。
     private func expectedHeader(userId: String?, token: String?) -> String {
-        var parts = ["Emby"]
+        var fields: [String] = []
         if let userId {
-            parts.append("UserId=\"\(userId)\"")
+            fields.append("UserId=\"\(userId)\"")
         }
-        parts.append("Client=\"Prism\"")
-        parts.append("Device=\"TestMac\"")
-        parts.append("DeviceId=\"TEST-DEVICE-ID\"")
-        parts.append("Version=\"1.0.0\"")
+        fields.append("Client=\"Prism\"")
+        fields.append("Device=\"TestMac\"")
+        fields.append("DeviceId=\"TEST-DEVICE-ID\"")
+        fields.append("Version=\"1.0.0\"")
         if let token {
-            parts.append("Token=\"\(token)\"")
+            fields.append("Token=\"\(token)\"")
         }
-        return parts.joined(separator: ", ")
+        return "Emby " + fields.joined(separator: ", ")
     }
 
     @Test("有 token：鉴权头逐字段正确，并额外带 X-Emby-Token")

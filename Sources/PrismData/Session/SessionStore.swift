@@ -271,7 +271,7 @@ public actor SessionStore {
         guard !data.isEmpty else { return .empty }
 
         do {
-            let payload = try Self.makeDecoder().decode(SessionPayload.self, from: data)
+            let payload = try SessionJSON.makeDecoder().decode(SessionPayload.self, from: data)
             guard payload.schemaVersion <= SessionPayload.currentSchemaVersion else {
                 throw SessionStoreError.decoding(
                     "不支持的会话存储版本：\(payload.schemaVersion)"
@@ -289,52 +289,11 @@ public actor SessionStore {
     private func storePayload(_ payload: SessionPayload) throws {
         let data: Data
         do {
-            data = try Self.makeEncoder().encode(payload)
+            data = try SessionJSON.makeEncoder().encode(payload)
         } catch {
             throw SessionStoreError.encoding(String(describing: error))
         }
         try secureStore.save(data, account: Self.sessionsAccount, service: service)
-    }
-
-    /// 构造编码器。
-    ///
-    /// 每次新建而不是共享单例：`JSONEncoder`/`JSONDecoder` 不是 `Sendable`，
-    /// 共享就得加 `nonisolated(unsafe)`；而 blob 只有几 KB，构造成本可以忽略。
-    private static func makeEncoder() -> JSONEncoder {
-        let encoder = JSONEncoder()
-        // 稳定输出：同样的数据编出同样的字节，便于排查与将来做「blob 校验」。
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return encoder
-    }
-
-    /// 构造解码器。
-    ///
-    /// **必须自定义日期策略**：``AuthSession`` 编码时用
-    /// `encodeEmbyDateIfPresent` 把 `createdAt` 写成 ISO8601 **字符串**（与 Emby 的
-    /// `.NET DateTimeOffset` 格式对齐），但它的 `init(from:)` 用的是
-    /// `container.decodeIfPresent(Date.self, ...)`。用默认策略（`.deferredToDate`，
-    /// 期望 Double）去解字符串会抛 `typeMismatch`，而那里外面套了 `try?`，结果是
-    /// **`createdAt` 静默变成 `nil`**。这里用自定义策略把字符串读回来，保证往返无损。
-    ///
-    /// 精度：ISO8601 带 3 位小数秒，即毫秒；亚毫秒部分会丢（对本场景无影响）。
-    private static func makeDecoder() -> JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            if let text = try? container.decode(String.self),
-               let date = EmbyDateDecoding.date(from: text) {
-                return date
-            }
-            if let seconds = try? container.decode(Double.self) {
-                // `.deferredToDate` 的产物（参考日起点的秒数），兼容旧数据。
-                return Date(timeIntervalSinceReferenceDate: seconds)
-            }
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "无法解析日期"
-            )
-        }
-        return decoder
     }
 
     /// 按「`createdAt` 晚者优先，同序取后者」挑出最新会话。

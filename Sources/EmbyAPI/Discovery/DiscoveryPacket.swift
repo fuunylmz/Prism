@@ -103,10 +103,7 @@ public enum DiscoveryPacket {
     /// - Parameter data: UDP 收到的原始字节。
     /// - Returns: 解析结果；不是「看起来像发现回包」的 JSON 时为 `nil`。
     public static func decode(_ data: Data) -> Reply? {
-        // 有些实现会在 JSON 后面补 `\0` 或换行，先裁掉首尾空白与控制字符。
-        let trimmed = Data(data.drop(while: { $0 == 0x00 || $0 == 0x20 || $0 == 0x09 || $0 == 0x0A || $0 == 0x0D }))
-        guard !trimmed.isEmpty else { return nil }
-        guard let object = (try? JSONSerialization.jsonObject(with: trimmed)) as? [String: Any] else { return nil }
+        guard let object = jsonObject(from: data) else { return nil }
 
         let reply = Reply(
             address: string(in: object, keys: ["Address"]),
@@ -132,6 +129,41 @@ public enum DiscoveryPacket {
     }
 
     // MARK: - 内部
+
+    /// 从原始字节里尽力解出 JSON 对象。
+    ///
+    /// UDP 报文的**首尾都可能带垃圾**：C 字符串的尾部 `\0`、`\r\n`、发送方手工拼
+    /// 缓冲区留下的填充字节。因此分两级处理：
+    ///
+    /// 1. 先裁掉首尾的空白 / 控制字符（覆盖绝大多数情况）；
+    /// 2. 仍然失败时，退化成「截取第一个 `{` 到最后一个 `}`」——JSON 对象一定被花括号
+    ///    包住，这样能容忍任意位置的尾部垃圾，而不只是 `\0`。
+    ///
+    /// - Parameter data: UDP 收到的原始字节。
+    /// - Returns: 解析出的 JSON 对象；无法解析时为 `nil`。
+    private static func jsonObject(from data: Data) -> [String: Any]? {
+        let trimmed = Data(data.drop(while: isPadding).reversed().drop(while: isPadding).reversed())
+        guard !trimmed.isEmpty else { return nil }
+
+        if let object = (try? JSONSerialization.jsonObject(with: trimmed)) as? [String: Any] {
+            return object
+        }
+
+        guard let start = trimmed.firstIndex(of: UInt8(ascii: "{")),
+              let end = trimmed.lastIndex(of: UInt8(ascii: "}")),
+              start < end
+        else { return nil }
+        let body = Data(trimmed[start...end])
+        return (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+    }
+
+    /// 判断字节是否是填充用的空白 / 控制字符（NUL、空格、制表、换行、回车）。
+    ///
+    /// - Parameter byte: 单个字节。
+    /// - Returns: 是否可安全裁掉。
+    private static func isPadding(_ byte: UInt8) -> Bool {
+        byte == 0x00 || byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
+    }
 
     /// 大小写不敏感地取一个非空字符串字段。
     ///

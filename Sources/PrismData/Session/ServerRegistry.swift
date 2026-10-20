@@ -157,7 +157,7 @@ public actor ServerRegistry {
     /// 「让用户重新添加服务器」，而不是让整个启动流程失败。
     private func readAll() -> [ServerConnection] {
         guard let data = defaults.data(forKey: serversKey), !data.isEmpty else { return [] }
-        guard let decoded = try? JSONDecoder().decode([ServerConnection].self, from: data) else {
+        guard let decoded = try? SessionJSON.makeDecoder().decode([ServerConnection].self, from: data) else {
             return []
         }
         return decoded
@@ -165,7 +165,7 @@ public actor ServerRegistry {
 
     /// 写回全部服务器。
     private func write(_ connections: [ServerConnection]) {
-        guard let data = try? JSONEncoder().encode(connections) else { return }
+        guard let data = try? SessionJSON.makeEncoder().encode(connections) else { return }
         defaults.set(data, forKey: serversKey)
     }
 }

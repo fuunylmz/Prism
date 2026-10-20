@@ -22,10 +22,12 @@ import PrismCore
 /// - **顺序稳定**：按响应到达顺序产出，不做二次排序，测试可逐条断言。
 public actor ServerDiscovery {
     /// 发现协议使用的 UDP 端口（默认 7359）。
-    public let port: Int
+    ///
+    /// 显式标 `nonisolated`：它是不变的 `Sendable` 值，UI 层拼文案时不该被迫 `await`。
+    public nonisolated let port: Int
 
     /// 未显式传 `timeout` 时使用的收集窗口。
-    public let timeout: Duration
+    public nonisolated let timeout: Duration
 
     /// 实际的报文收发通道；为 `nil` 时 ``discover(timeout:)`` 直接返回空流。
     private let transport: (any DiscoveryTransport)?
@@ -55,7 +57,7 @@ public actor ServerDiscovery {
     init(
         port: Int = DiscoveryPacket.defaultPort,
         timeout: Duration = .seconds(3),
-        transport: (any DiscoveryTransport)?,
+        transport: (any DiscoveryTransport)? = nil,
         probe: ServerProbe = ServerProbe()
     ) {
         self.port = port
@@ -66,38 +68,29 @@ public actor ServerDiscovery {
 
     // MARK: - 自动发现
 
-    /// 发送 UDP 广播并收集响应，超时后正常结束流。
+    /// 发送 UDP 广播并收集响应，超时后正常结束流（契约签名）。
     ///
     /// 产出顺序 = 响应到达顺序；同一服务器只产出一次。超时、socket 失败、
     /// 报文非法都**不会**抛错，流只是结束。
     ///
     /// 用法：
     /// ```swift
-    /// for await server in discovery.discover() {
+    /// for await server in discovery.discover(timeout: .seconds(3)) {
     ///     print(server.name, server.baseURL)
     /// }
     /// ```
     ///
-    /// - Parameter timeout: 收集窗口；`nil` 表示使用初始化时的默认值（3 秒）。
+    /// - Parameter timeout: 收集窗口。
     /// - Returns: 服务器流。消费者取消任务或跳出循环时，内部任务会被取消并释放 socket。
-    public func discover(timeout: Duration? = nil) -> AsyncStream<DiscoveredServer> {
-        let effectiveTimeout = timeout ?? self.timeout
-        let port = self.port
-        guard let transport else {
-            return AsyncStream { $0.finish() }
-        }
+    public nonisolated func discover(timeout: Duration) -> AsyncStream<DiscoveredServer> {
+        makeStream(timeout: timeout)
+    }
 
-        return AsyncStream { continuation in
-            let task = Task {
-                await Self.run(
-                    transport: transport,
-                    port: port,
-                    timeout: effectiveTimeout,
-                    emit: continuation
-                )
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
+    /// 使用初始化时的默认收集窗口（3 秒）发现服务器。
+    ///
+    /// - Returns: 服务器流。
+    public nonisolated func discover() -> AsyncStream<DiscoveredServer> {
+        makeStream(timeout: timeout)
     }
 
     /// ``discover(timeout:)`` 的数组版本（`await` 一次拿全部结果）。
@@ -106,12 +99,38 @@ public actor ServerDiscovery {
     ///
     /// - Parameter timeout: 收集窗口；`nil` 表示使用初始化时的默认值。
     /// - Returns: 去重后的服务器列表（响应到达顺序）。
-    public func discoverAll(timeout: Duration? = nil) async -> [DiscoveredServer] {
+    public nonisolated func discoverAll(timeout: Duration? = nil) async -> [DiscoveredServer] {
         var servers: [DiscoveredServer] = []
-        for await server in discover(timeout: timeout) {
+        for await server in makeStream(timeout: timeout ?? self.timeout) {
             servers.append(server)
         }
         return servers
+    }
+
+    /// 构造结果流：立即返回，真正的收发在内部任务里跑。
+    ///
+    /// `nonisolated` + 只读 `let` 属性，因此调用方不需要 `await`，
+    /// 与冻结契约里 `discover` 的签名（非 `async`）一致。
+    ///
+    /// - Parameter timeout: 收集窗口。
+    /// - Returns: 服务器流。
+    private nonisolated func makeStream(timeout: Duration) -> AsyncStream<DiscoveredServer> {
+        guard let transport else {
+            return AsyncStream { $0.finish() }
+        }
+        let port = self.port
+
+        return AsyncStream { continuation in
+            let task = Task {
+                await Self.run(
+                    transport: transport,
+                    port: port,
+                    timeout: timeout,
+                    emit: continuation
+                )
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     // MARK: - 手动地址校验

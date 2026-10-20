@@ -14,6 +14,9 @@ struct PrismApp: App {
         .defaultSize(width: 1120, height: 720)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            // 导航类快捷键（⌘1/⌘2/⌘3、⌘F、⌘,、⌘⇧S、Esc 返回）由 AppShell 提供；
+            // 通过 focusedSceneValue 自动绑定到当前窗口的 NavigationModel。
+            PrismCommands()
         }
     }
 }

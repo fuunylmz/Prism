@@ -113,6 +113,11 @@ final class RecordingSleeper: RetrySleeping, @unchecked Sendable {
 
     /// 记录并立即返回。
     func sleep(seconds: TimeInterval) async {
+        record(seconds)
+    }
+
+    /// 同步记录（`NSLock` 在 async 上下文里不可直接加锁，拆成同步方法）。
+    private func record(_ seconds: TimeInterval) {
         lock.lock()
         defer { lock.unlock() }
         storage.append(seconds)

@@ -3,66 +3,56 @@ import SwiftUI
 
 // MARK: - 统一空态
 
-/// 外壳阶段的统一空态样式。
+/// 外壳占位页的统一容器。
 ///
-/// 视觉语言与 `DesignSystem` 的空态一致：SF Symbol + 标题 + 说明 + 可选脚注，
-/// 居中、留白使用 ``Spacing``，颜色使用 ``Palette`` 语义色。
+/// 视觉直接复用 `DesignSystem` 的 ``EmptyStateView``（图标 + 标题 + 说明 + 可选主操作），
+/// 只在下方追加一行可选脚注，用于标注「该页由哪个工单接入」以及 id 等排障信息。
 ///
-/// - TODO: `DesignSystem` 的 `EmptyStateView` 落地后，把本视图替换为它
-///   （当前 `DesignSystem/` 尚未提供该类型，先用同风格的最小实现，避免外壳阻塞）。
+/// 这样占位页与将来的真实空态共用同一套设计语言，接入真实页面时只需替换内容，
+/// 不会出现「占位一种风格、正式另一种风格」的割裂。
 struct ShellEmptyState: View {
     /// 顶部 SF Symbol。
     let systemImage: String
     /// 主标题。
-    let title: String
+    let title: LocalizedStringKey
     /// 一句解释（发生了什么 / 下一步做什么）。
-    let message: String
-    /// 可选脚注（快捷键提示、占位说明）。
+    let message: LocalizedStringKey
+    /// 可选脚注（快捷键提示、占位说明、id 等）。
     var footnote: String?
 
     var body: some View {
-        VStack(spacing: Spacing.md) {
-            Image(systemName: systemImage)
-                .font(.system(size: 44, weight: .light))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(Palette.textSecondary)
-                .accessibilityHidden(true)
-
-            Text(title)
-                .font(Typography.title)
-                .foregroundStyle(Palette.textPrimary)
-                .multilineTextAlignment(.center)
-
-            Text(message)
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(spacing: Spacing.sm) {
+            EmptyStateView(
+                systemImage: systemImage,
+                title: title,
+                message: message
+            )
 
             if let footnote {
                 Text(footnote)
                     .font(Typography.caption)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
+                    .padding(.horizontal, Spacing.xl)
+                    .accessibilityLabel("说明：\(footnote)")
             }
         }
-        .frame(maxWidth: 420)
-        .padding(Spacing.xxl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityElement(children: .combine)
     }
 }
 
 // MARK: - 首页
 
 /// 首页占位（S04）。真实内容：继续观看 / 接下来 / 最近添加。
+///
+/// - TODO: 由首页工单替换为真实视图（`HomeView` + `HomeViewModel`）。
 struct HomePlaceholderView: View {
     var body: some View {
         ShellEmptyState(
             systemImage: "house",
             title: "首页",
             message: "继续观看、接下来与最近添加将在这里出现。",
-            footnote: "首页内容接入后替换此占位"
+            footnote: "首页工单接入后替换此占位"
         )
     }
 }
@@ -70,6 +60,8 @@ struct HomePlaceholderView: View {
 // MARK: - 媒体库
 
 /// 媒体库网格占位（S05）。
+///
+/// - TODO: 由媒体库工单替换为真实网格（`LibraryGridView` + `LibraryViewModel`）。
 struct LibraryPlaceholderView: View {
     /// 服务端视图 id。
     let libraryID: String
@@ -81,7 +73,7 @@ struct LibraryPlaceholderView: View {
             systemImage: type == .series ? "tv" : "film",
             title: type == .series ? "剧集" : "电影",
             message: "媒体库网格将在这里显示，支持筛选、排序与无限滚动。",
-            footnote: "库 id：\(libraryID) · 媒体库内容接入后替换此占位"
+            footnote: "库 id：\(libraryID) · 媒体库工单接入后替换此占位"
         )
     }
 }
@@ -89,6 +81,8 @@ struct LibraryPlaceholderView: View {
 // MARK: - 搜索
 
 /// 搜索落地页占位（S14）。
+///
+/// - TODO: 由搜索工单替换为「最近搜索 / 热门 / 结果分组」。
 struct SearchPlaceholderView: View {
     var body: some View {
         ShellEmptyState(
@@ -103,6 +97,8 @@ struct SearchPlaceholderView: View {
 // MARK: - 下载
 
 /// 下载管理占位（S17，v1.1）。
+///
+/// - TODO: v1.1 由下载工单实现；v1.0 侧边栏入口为禁用态。
 struct DownloadsPlaceholderView: View {
     var body: some View {
         ShellEmptyState(
@@ -117,6 +113,8 @@ struct DownloadsPlaceholderView: View {
 // MARK: - 设置
 
 /// 设置面板占位（S15）。
+///
+/// - TODO: 由设置工单替换为 5 个面板的真实表单（独立 `Settings` 窗口）。
 struct SettingsPlaceholderView: View {
     /// 当前面板。
     let tab: SettingsTab
@@ -126,14 +124,14 @@ struct SettingsPlaceholderView: View {
             systemImage: tab.systemImage,
             title: "设置 · \(tab.title)",
             message: "该面板的设置项由设置工单接入。",
-            footnote: "面板 id：\(tab.rawValueDescription)"
+            footnote: "面板：\(tab.identifier)"
         )
     }
 }
 
 extension SettingsTab {
-    /// 面板的稳定标识（用于占位与诊断，不参与持久化契约）。
-    var rawValueDescription: String {
+    /// 面板的稳定标识（用于占位说明与诊断，不参与持久化契约）。
+    var identifier: String {
         switch self {
         case .playback: "playback"
         case .subtitles: "subtitles"
@@ -148,6 +146,8 @@ extension SettingsTab {
 // MARK: - 详情
 
 /// 详情栏占位（S07 / S08）。
+///
+/// - TODO: 由详情工单替换为 `ItemDetailView`（backdrop + 元数据 + 播放按钮）。
 struct DetailPlaceholderView: View {
     /// 条目 id。
     let itemId: String
@@ -157,7 +157,7 @@ struct DetailPlaceholderView: View {
             systemImage: "rectangle.on.rectangle",
             title: "条目详情",
             message: "海报、元数据、播放 / 收藏按钮与简介将在这里显示。",
-            footnote: "条目 id：\(itemId) · 详情内容接入后替换此占位"
+            footnote: "条目 id：\(itemId) · 详情工单接入后替换此占位"
         )
     }
 }
@@ -179,7 +179,10 @@ struct DetailEmptyView: View {
 /// 播放器覆盖层占位（S10）。
 ///
 /// 只负责「全窗口覆盖 + 关闭」的壳；播放画面、控制条与**播放器快捷键**
-/// （空格 / ←→ / F / M / S 等）由播放器工单实现，此处刻意不注册任何键盘映射。
+/// （空格 / ←→ / F / M / S 等，见 ux-benchmark §4.6）由播放器工单实现，
+/// 此处刻意不注册任何键盘映射，避免两套实现互相覆盖。
+///
+/// - TODO: 由播放器工单替换为 `PlayerView`（AetherEngine 渲染面 + 控制条）。
 struct PlayerPlaceholderView: View {
     /// 播放器路由（携带条目 id 与续播点）。
     let route: Route?
@@ -199,13 +202,18 @@ struct PlayerPlaceholderView: View {
                 Image(systemName: "play.rectangle.fill")
                     .font(.system(size: 56, weight: .light))
                     .foregroundStyle(.white.opacity(0.85))
+                    .accessibilityHidden(true)
+
                 Text("播放器占位")
                     .font(Typography.title)
                     .foregroundStyle(.white)
+
                 Text("播放画面、控制条与播放器快捷键由播放器工单实现。")
                     .font(Typography.caption)
                     .foregroundStyle(.white.opacity(0.65))
+                    .multilineTextAlignment(.center)
             }
+            .padding(Spacing.xl)
 
             VStack {
                 HStack(spacing: Spacing.sm) {
@@ -213,7 +221,9 @@ struct PlayerPlaceholderView: View {
                         .font(Typography.headline)
                         .foregroundStyle(.white.opacity(0.9))
                         .lineLimit(1)
-                    Spacer()
+
+                    Spacer(minLength: Spacing.sm)
+
                     Button(action: onClose) {
                         Image(systemName: "xmark")
                             .font(.system(size: 13, weight: .semibold))
@@ -228,6 +238,7 @@ struct PlayerPlaceholderView: View {
                 .padding(.horizontal, Spacing.lg)
                 .padding(.vertical, Spacing.sm)
                 .background(.black.opacity(0.35))
+
                 Spacer()
             }
         }

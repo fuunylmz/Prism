@@ -190,9 +190,6 @@ enum PreviewData {
         communityRating: 8.4,
         genres: ["剧情"],
         imageTags: [.primary: "tag-episode-1"],
-        seriesName: "人生切割术",
-        indexNumber: 1,
-        parentIndexNumber: 1,
         userData: UserItemData(
             playbackPosition: Ticks(seconds: 640),
             playCount: 0,
@@ -200,7 +197,10 @@ enum PreviewData {
             played: false,
             lastPlayedDate: nil,
             unplayedItemCount: nil
-        )
+        ),
+        indexNumber: 1,
+        parentIndexNumber: 1,
+        seriesName: "人生切割术"
     )
 
     /// 网格用的一组条目。
@@ -275,6 +275,86 @@ private struct StateBoardPreview: View {
 
 #Preview("三态总览 · 浅色") {
     StateBoardPreview()
+        .prismTheme(PrismTheme(appearance: .light))
+        .environment(\.posterImageLoader, PreviewImageLoader())
+}
+
+// MARK: - stateView 四态映射预览
+
+/// 演示 `.stateView(_:)` 把 `LoadState` 映射成四种画面。
+///
+/// 加载中的占位直接用 ``LoadingStateView``；有数据时用 ``PosterCard``；
+/// 空态 / 错误态使用默认文案。
+private struct LoadStateMappingPreview: View {
+    private let loading: LoadState<[MediaItem]> = .loading
+    private let loaded: LoadState<[MediaItem]> = .loaded(PreviewData.items)
+    private let empty: LoadState<[MediaItem]> = .empty
+    private let failed: LoadState<[MediaItem]> = .failed(PreviewData.recoverableError)
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Spacing.lg) {
+            pane("loading") {
+                LoadingStateView(style: .list(rows: 3))
+                    .stateView(loading) { items in
+                        Text(verbatim: "\(items.count)")
+                    }
+            }
+            pane("loaded") {
+                LoadingStateView(style: .list(rows: 3))
+                    .stateView(loaded) { items in
+                        VStack(alignment: .leading, spacing: Spacing.sm) {
+                            PosterCard(
+                                title: items.first?.name ?? "",
+                                subtitle: items.first?.subtitle,
+                                imageURL: PreviewData.posterURL(for: items.first?.id ?? "none"),
+                                progress: items.first?.progress,
+                                onSelect: {}
+                            )
+                            Text(verbatim: "\(items.count) 项")
+                                .font(Typography.caption)
+                                .foregroundStyle(Palette.textSecondary)
+                        }
+                    }
+            }
+            pane("empty") {
+                LoadingStateView(style: .list(rows: 3))
+                    .stateView(empty) { items in
+                        Text(verbatim: "\(items.count)")
+                    }
+            }
+            pane("failed") {
+                LoadingStateView(style: .list(rows: 3))
+                    .stateView(failed, onRetry: {}) { items in
+                        Text(verbatim: "\(items.count)")
+                    }
+            }
+        }
+        .padding(Spacing.xxl)
+        .frame(width: 980, height: 460, alignment: .top)
+        .background(Palette.surface)
+    }
+
+    private func pane(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text(title)
+                .font(Typography.caption)
+                .foregroundStyle(Palette.textSecondary)
+            content()
+                .frame(width: 210, height: 360)
+                .background(Palette.surfaceElevated)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        }
+    }
+}
+
+#Preview("stateView 四态 · 深色") {
+    LoadStateMappingPreview()
+        .prismTheme(PrismTheme(appearance: .dark))
+        .environment(\.posterImageLoader, PreviewImageLoader())
+}
+
+#Preview("stateView 四态 · 浅色") {
+    LoadStateMappingPreview()
         .prismTheme(PrismTheme(appearance: .light))
         .environment(\.posterImageLoader, PreviewImageLoader())
 }

@@ -191,10 +191,20 @@ private struct PrismThemeModifier: ViewModifier {
     let theme: PrismTheme
 
     func body(content: Content) -> some View {
-        content
-            .environment(\.prismTheme, theme)
-            .preferredColorScheme(theme.appearance.colorScheme)
-            .tint(Palette.accent)
+        Group {
+            if let scheme = theme.appearance.colorScheme {
+                // 同时写 `\.colorScheme`：`preferredColorScheme` 只负责**窗口**外观，
+                // 而 `Color(nsColor:)` 这类语义色是**按环境**解析的——在 ImageRenderer
+                // 或没有窗口的渲染环境里，只设 preferredColorScheme 会退回浅色。
+                // 两者都设，预览与真机才一致。
+                content.environment(\.colorScheme, scheme)
+            } else {
+                content
+            }
+        }
+        .environment(\.prismTheme, theme)
+        .preferredColorScheme(theme.appearance.colorScheme)
+        .tint(Palette.accent)
     }
 }
 
