@@ -178,15 +178,26 @@ public enum ServerAddressValidator {
     /// - Parameter input: 原始输入。
     /// - Returns: 清洗后的字符串（可能为空）。
     static func sanitize(_ input: String) -> String {
+        // 多行粘贴时**保留第一个非空行**，丢弃其余行。
+        //
+        // 不能简单地把所有换行删掉：`"http://a\nhttp://b"` 删完会粘成
+        // `"http://ahttp://b"` 这种必然非法的串，用户只会收到一个莫名其妙的
+        // 「地址无效」。取首行既符合直觉（复制了一串地址时通常想要第一个），
+        // 也能正确处理首行是空行的情况（`"\n\nhttp://a\n"`）。
+        let firstLine = input
+            .split(whereSeparator: \.isNewline)
+            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map(String.init) ?? ""
+
         // NFKC 兼容分解：全角数字/冒号/斜杠 → 半角，NBSP → 普通空格。
-        var text = input.precomposedStringWithCompatibilityMapping
+        var text = firstLine.precomposedStringWithCompatibilityMapping
         for invisible in ["\u{200B}", "\u{200C}", "\u{200D}", "\u{FEFF}"] {
             text = text.replacingOccurrences(of: invisible, with: "")
         }
         // Windows 风格的路径分隔符。
         text = text.replacingOccurrences(of: "\\", with: "/")
-        // 粘贴多行时混进来的换行/制表符。
-        text = text.filter { !$0.isNewline && $0 != "\t" }
+        // 从表格 / 终端里复制时混进来的制表符（单行内的分隔，直接删掉）。
+        text = text.replacingOccurrences(of: "\t", with: "")
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 包裹符号：`"http://x"`、`<http://x>`、`“http://x”`。

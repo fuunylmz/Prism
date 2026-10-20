@@ -41,10 +41,25 @@ public extension EmbyClient {
 
     /// 取当前 token 对应的用户（App 启动时恢复会话用）。
     ///
+    /// - Important: `/Users/Me` 在 Emby 侧存在性存疑（见 ``CurrentUserEndpoint`` 的说明）。
+    ///   本地保存了 `userId` 时，优先用 ``user(id:)``；本方法适合 Jellyfin，
+    ///   或在拿到 5xx 后回退。
     /// - Returns: 当前用户。
     /// - Throws: ``PrismCore/EmbyError/unauthorized`` 表示 token 已被吊销，应跳回登录页。
     func currentUser() async throws -> EmbyUser {
         try await send(CurrentUserEndpoint())
+    }
+
+    /// 按 id 取用户（恢复会话的稳妥方案）。
+    ///
+    /// `GET /Users/{Id}` 在 Emby 官方 Reference 与 OpenAPI 中均存在，
+    /// 是 `/Users/Me` 不可用时的回退。
+    ///
+    /// - Parameter userId: 用户 id（来自本地保存的 ``PrismCore/AuthSession``）。
+    /// - Returns: 用户。
+    /// - Throws: ``PrismCore/EmbyError``。
+    func user(id userId: String) async throws -> EmbyUser {
+        try await send(UserByIdEndpoint(userId: userId))
     }
 
     /// 登出并吊销当前 token。

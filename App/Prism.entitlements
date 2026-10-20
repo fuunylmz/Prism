@@ -2,10 +2,25 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- 应用沙盒 -->
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+
+	<!-- 出站网络：访问 Emby 服务器的 HTTP/HTTPS 与 WebSocket -->
 	<key>com.apple.security.network.client</key>
 	<true/>
+
+	<!--
+		入站网络监听：**UDP 7359 服务器发现必需**。
+		Emby 的自动发现依赖向 255.255.255.255 广播并接收回包；
+		沙盒下若只有 network.client，广播包可以发出，但接收回包会被静默拦截
+		（表现为「永远发现不到服务器」，且没有任何错误日志）。
+		同时 Socket 绑定本地随机端口也需要 server 权限。
+	-->
+	<key>com.apple.security.network.server</key>
+	<true/>
+
+	<!-- 用户选择的文件读写（v1.1 下载/导出字幕用） -->
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
 </dict>

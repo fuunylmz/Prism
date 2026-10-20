@@ -92,7 +92,10 @@ public struct ServerConnection: Sendable, Codable, Hashable, Identifiable {
         let url = try? container.decodeIfPresent(URL.self, forKey: .baseURL)
         self.baseURL = url ?? URL(string: "about:blank") ?? URL(filePath: "/")
         self.isDemo = (try? container.decodeIfPresent(Bool.self, forKey: .isDemo)) ?? false
-        self.lastConnectedAt = try? container.decodeIfPresent(Date.self, forKey: .lastConnectedAt)
+        // 与 `encode(to:)` 严格对称（详见 `AuthSession.createdAt` 的同名注释）。
+        // 裸 `decodeIfPresent(Date.self)` + `try?` 会把 ISO8601 字符串静默解成 nil，
+        // 导致 `ServerRegistry` 按「最近使用」排序失效。
+        self.lastConnectedAt = container.decodeEmbyDateIfPresent(forKey: .lastConnectedAt)
     }
 
     /// 编码为持久化用的 JSON。

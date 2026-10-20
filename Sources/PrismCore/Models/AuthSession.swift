@@ -91,7 +91,12 @@ public struct AuthSession: Sendable, Codable, Hashable, Identifiable {
         let userId = container.decodeFlexibleString(forKey: .userId) ?? ""
         self.userId = userId.isEmpty ? user.id : userId
 
-        self.createdAt = try? container.decodeIfPresent(Date.self, forKey: .createdAt)
+        // 与 `encode(to:)` 严格对称：编码走 `encodeEmbyDateIfPresent`（ISO8601 字符串），
+        // 解码必须用 `decodeEmbyDateIfPresent`。
+        // 用裸 `try? decodeIfPresent(Date.self, ...)` 会在默认解码策略下期望 Double 秒数，
+        // 遇到 ISO8601 字符串时**静默返回 nil**（`try?` 吞掉了类型不匹配错误），
+        // 曾导致 `ServerRegistry` 的「最近使用」排序全部失效。这是真实发生过的 bug。
+        self.createdAt = container.decodeEmbyDateIfPresent(forKey: .createdAt)
     }
 
     /// 按 `AuthenticationResult` 的 PascalCase 字段名编码。

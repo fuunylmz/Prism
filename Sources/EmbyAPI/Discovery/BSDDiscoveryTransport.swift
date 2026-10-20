@@ -29,6 +29,15 @@ import PrismCore
 /// `com.apple.security.network.server`（收回包）；macOS 15+ 首次广播可能触发
 /// 「本地网络」隐私弹窗（需要 `NSLocalNetworkUsageDescription`）。
 /// 这些属于 App target 的配置，不在本模块范围内。
+///
+/// ## 验证状态
+///
+/// 编译通过、`DiscoveryTransport` 契约被单测覆盖（假传输），但**本层自身尚未在
+/// 真实局域网 + 真实 Emby 服务器上跑过**——开发期没有可用的 Emby 实例
+/// （`docs/BUILD_ENV.md` §6：真实服务器由用户后置提供）。
+/// 【待验证】验证方法：在用户提供真实服务器后，于沙盒构建里跑一次 `discover()`，
+/// 确认能收到回包；同时用 Wireshark 确认发出的目标地址包含 `255.255.255.255:7359`
+/// 与子网广播地址。
 public actor BSDDiscoveryTransport: DiscoveryTransport {
     /// 一个已打开的 socket 及其地址族。
     private struct OpenSocket: Sendable {

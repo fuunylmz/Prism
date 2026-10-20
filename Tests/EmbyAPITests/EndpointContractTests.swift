@@ -496,3 +496,29 @@ struct ItemsEndpointParameterizedTests {
         #expect(endpoint.resolvedPath().contains("SearchTerm=a%20b%26c"))
     }
 }
+
+// MARK: - 用户端点
+
+/// `/Users/Me` 与 `/Users/{Id}` 的契约。
+///
+/// `/Users/Me` 在 Emby 侧存疑，因此必须同时保留官方确定存在的 `/Users/{Id}` 作为回退。
+@Suite("用户端点")
+struct UserEndpointTests {
+
+    @Test("UserByIdEndpoint：路径与鉴权")
+    func userById() {
+        let endpoint = UserByIdEndpoint(userId: "8a1f0b2c3d4e5f60718293a4b5c6d7e8")
+        #expect(endpoint.path == "/Users/8a1f0b2c3d4e5f60718293a4b5c6d7e8")
+        #expect(endpoint.method == .get)
+        #expect(endpoint.requiresAuth)
+        #expect(endpoint.query.isEmpty)
+    }
+
+    @Test("CurrentUserEndpoint 与 UserByIdEndpoint 都能解出同一个用户")
+    func bothDecodeSameUser() throws {
+        let user = try EmbyJSON.decode(EmbyUser.self, from: Data(Fixtures.currentUserMinimal.utf8))
+        #expect(user.name == "alice")
+        // 两个端点的解码类型相同，回退时调用方不需要改模型。
+        #expect(CurrentUserEndpoint().path != UserByIdEndpoint(userId: user.id).path)
+    }
+}

@@ -76,6 +76,27 @@ struct DiscoveryAddressValidatorTests {
         #expect(url.absoluteString == "http://192.168.1.10:8096")
     }
 
+    @Test("首行是空行的多行粘贴仍能解析")
+    func leadingBlankLines() throws {
+        let url = try ServerAddressValidator.normalize("\n\n  http://192.168.1.10:8096  \n")
+        #expect(url.absoluteString == "http://192.168.1.10:8096")
+    }
+
+    @Test("只有空行 / 空串时抛 invalidURL")
+    func blankOnlyInputs() {
+        for input in ["", "\n\n", "\n \n\t\n", "   \n   "] {
+            #expect(throws: EmbyError.invalidURL) {
+                try ServerAddressValidator.normalize(input)
+            }
+        }
+    }
+
+    @Test("单行内的制表符被删除")
+    func tabInsideLine() throws {
+        let url = try ServerAddressValidator.normalize("\thttp://192.168.1.10:8096\t")
+        #expect(url.absoluteString == "http://192.168.1.10:8096")
+    }
+
     @Test("中文全角数字与全角冒号")
     func fullWidthCharacters() throws {
         let url = try ServerAddressValidator.normalize("１９２.１６８.１.１０：８０９６")
