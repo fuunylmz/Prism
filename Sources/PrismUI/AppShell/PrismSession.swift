@@ -64,32 +64,43 @@ public final class PrismSession {
     }
 
     /// 媒体库数据源。
+    /// 媒体库数据源。
+    ///
+    /// 同样不传 `accessToken`，理由见 ``detailDataSource``。
     public var libraryDataSource: EmbyLibraryDataSource {
         EmbyLibraryDataSource(
             client: client,
             userId: userId,
             baseURL: server.baseURL,
-            accessToken: accessToken
+            accessToken: nil
         )
     }
 
     /// 详情数据源。
     ///
     /// 注意：`EmbyDetailDataSource` 不接收 `baseURL`——它内部用 `client.baseURL` 拼图片地址。
+    /// 详情数据源。
+    ///
+    /// `accessToken` 传 `nil`：图片走 `EmbyImageLoader`，它会把同源 URL 还原成端点、
+    /// 由 `EmbyClient` 注入 `X-Emby-Token` 头。把令牌拼进 URL 会同时进入
+    /// 缓存键、服务端访问日志与 Referer，是不必要的泄漏面。
     public var detailDataSource: EmbyDetailDataSource {
         EmbyDetailDataSource(
             client: client,
             userId: userId,
-            accessToken: accessToken
+            accessToken: nil
         )
     }
 
     /// 搜索数据源。
+    /// 搜索数据源。
+    ///
+    /// 同样不传 `apiKey`，理由见 ``detailDataSource``。
     public var searchDataSource: EmbySearchDataSource {
         EmbySearchDataSource(
             client: client,
             userId: userId,
-            apiKey: accessToken,
+            apiKey: nil,
             baseURL: server.baseURL
         )
     }

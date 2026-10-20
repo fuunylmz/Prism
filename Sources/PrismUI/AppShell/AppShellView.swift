@@ -187,9 +187,11 @@ private struct ContentColumnView: View {
                             ? DemoDataSources.Home()
                             : session.homeDataSource
                     ),
+                    // 不传 accessToken：图片走 `EmbyImageLoader` 的鉴权头，
+                    // 令牌不进 URL（详见 `PrismSession.detailDataSource` 的说明）。
                     imageResolver: HomeImageResolver(
                         baseURL: session.server.baseURL,
-                        accessToken: session.accessToken
+                        accessToken: nil
                     ),
                     onNavigate: { route in model.navigate(to: route) }
                 )
@@ -267,15 +269,16 @@ private struct DetailColumnView: View {
     var body: some View {
         if let itemID = model.selectedDetailItemID {
             if let session {
-                // 电影与剧集共用同一个 ViewModel，由它按 `MediaItem.type` 决定布局。
-                let viewModel = DetailViewModel(
-                    dataSource: session.isDemo
-                        ? DemoDataSources.Detail()
-                        : session.detailDataSource,
-                    itemId: itemID
-                )
-                DetailRouterView(
-                    viewModel: viewModel,
+                // `DetailScreen` 内部用 `@State` 持有 ViewModel 并自己按类型分派，
+                // 分支切换发生在稳定视图内部，不会因 View 类型变化重新种子化。
+                // `.id(itemID)` 是必须的：换条目要重建状态，否则会继续显示上一个条目。
+                DetailScreen(
+                    model: DetailViewModel(
+                        dataSource: session.isDemo
+                            ? DemoDataSources.Detail()
+                            : session.detailDataSource,
+                        itemId: itemID
+                    ),
                     actions: DetailActions(
                         play: { request in
                             model.navigate(to: .player(
@@ -289,6 +292,7 @@ private struct DetailColumnView: View {
                         }
                     )
                 )
+                .id(itemID)
             } else {
                 DetailPlaceholderView(itemId: itemID)
             }

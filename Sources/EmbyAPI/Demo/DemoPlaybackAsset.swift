@@ -17,7 +17,10 @@ import os
 ///
 /// ## 产物
 ///
-/// - 位置：`~/Library/Caches/<bundleId>/demo/sample.mp4`
+/// - 位置：`FileManager.cachesDirectory/<bundleId>/demo/sample.mp4`
+///   （非沙盒进程解析为 `~/Library/Caches/...`；本 App 开了 App Sandbox，
+///   实际落在 `~/Library/Containers/app.prism.Prism/Data/Library/Caches/...`，
+///   两者都可写。见 `App/Prism.entitlements` 的 `com.apple.security.app-sandbox`。）
 /// - 规格：H.264 / 960×540 / 10 fps / 30 秒 + AAC 单声道静音音轨
 /// - 画面：按时间推进的渐变 + 时间码文字（`PRISM DEMO 00:12.3`）
 ///

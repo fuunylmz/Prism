@@ -5,7 +5,7 @@ import PrismCore
 ///
 /// ## 规模
 ///
-/// - 3 个媒体库视图：电影（26 部）、剧集（8 部 / 20 季 / 148 集）、合集（3 个套装）
+/// - 3 个媒体库视图：电影（26 部）、剧集（8 部 / 19 季 / 148 集）、合集（3 个套装）
 /// - 全部条目都有标题、年份、中文简介、评分、类型标签、时长、图片 tag
 /// - 观看状态三态齐全：未看 / 看到一半（`playbackPosition`）/ 已看完
 ///
@@ -69,7 +69,7 @@ public enum DemoLibrary {
     /// 全部单集（148 集）。
     public static var episodes: [MediaItem] { catalog.episodes }
 
-    /// 全部季（20 季）。
+    /// 全部季（19 季）。
     public static var seasons: [MediaItem] { catalog.seasons }
 
     /// 所有可被 `/Users/{id}/Items` 命中的条目（电影 + 剧 + 季 + 集 + 合集）。
@@ -443,7 +443,7 @@ public enum DemoLibrary {
 
     // MARK: - 剧集数据
 
-    /// 8 部剧，共 20 季、148 集。
+    /// 8 部剧，共 19 季、148 集。
     private static let seriesSpecs: [SeriesSpec] = [
         SeriesSpec(
             title: "雾港谜案", originalTitle: "Fog Harbor", year: 2021,

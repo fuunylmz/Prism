@@ -157,7 +157,20 @@ struct DemoAssetTests {
         #expect(FileManager.default.fileExists(atPath: second.path))
     }
 
-    @Test("默认目录落在 ~/Library/Caches/<bundleId>/demo")
+    @Test("目录不可写时返回 nil 而不是崩溃（播放器显示错误态）")
+    func unwritableDirectoryReturnsNil() async throws {
+        // 用一个「已存在的普通文件」当目录，createDirectory 必然失败。
+        let blocker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("prism-demo-blocker-\(UUID().uuidString)")
+        try Data("not a directory".utf8).write(to: blocker)
+        defer { try? FileManager.default.removeItem(at: blocker) }
+
+        let asset = DemoPlaybackAsset(directory: blocker.appendingPathComponent("demo", isDirectory: true))
+        let url = try await asset.sampleVideoURL()
+        #expect(url == nil, "不可写目录应返回 nil")
+    }
+
+    @Test("默认目录落在 caches/<bundleId>/demo")
     func defaultDirectoryLayout() {
         let directory = DemoPlaybackAsset.defaultDirectory()
         #expect(directory.lastPathComponent == "demo")
