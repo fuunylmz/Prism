@@ -14,9 +14,9 @@
 
 AetherEngine 内部已经实现了「FFmpeg demux + 重封装成 HLS-fMP4 交给 AVPlayer / 或 libavcodec 软解」的双路径，**它把我们要做的双引擎封装在了一个 Swift 包内部**。这样我们既拿到格式广度，又保住 macOS 原生能力（AirPlay / PiP / Dolby Vision / Atmos / Now Playing），还避免了 `OpaquePointer` 隔离层和 LGPL 静态链接问题。
 
-> **变更说明（rev.2 → rev.3）**：rev.2 的结论是「AVPlayer + libmpv 双引擎」。变更原因有两个，均为主管侧决策输入：① **用户已决定开源 Prism**，LGPL 静态链接的分发义务不再构成障碍；② 核实了 AetherEngine 的实际情况（见 §2.2），它在**几乎每个维度**都优于或等于 MPVKit，且没有 mpv 的 UX 硬伤。
+> **变更说明（rev.2 → rev.3）**：rev.2 的结论是「AVPlayer + libmpv 双引擎」。变更原因有两个，均为主管侧决策输入：① **用户已决定开源 Prism**，LGPL 静态链接的分发义务不再构成障碍；② 核实了 AetherEngine 的实际情况（见 §2.4），它在**几乎每个维度**都优于或等于 MPVKit，且没有 mpv 的 UX 硬伤。
 >
-> 本文保留 MPVKit 的完整核查记录（§2.3、附录 A），因为它是 Plan B，且部分事实（AVFoundation 边界、HLS 规范、Emby 参数）与引擎选型无关，仍然有效。
+> 本文保留 MPVKit 的完整核查记录（§2.1、附录 A），因为它是 Plan B，且部分事实（AVFoundation 边界、HLS 规范、Emby 参数）与引擎选型无关，仍然有效。
 
 ### 0.2 六条最重要的判断
 
@@ -34,7 +34,7 @@ AetherEngine 内部已经实现了「FFmpeg demux + 重封装成 HLS-fMP4 交给
 1. **AetherEngine 与 MPVKit 都尚未集成进 Prism 工程，两者状态均为【未集成 · 未实测】。**
    - AetherEngine：本文所有结论来自**官方 README / Package.swift / docs/api.md / docs/architecture.md 原文**，没有一行是跑出来的。**它有一个明确的集成前提**：要求 macOS 15.0 / Swift 6.4 / Xcode 27.0 / **至少 26.2 SDK**（因 `VTRegisterSupplementalVideoDecoderIfAvailable` 是 iOS/tvOS 26.2 API）。我们的环境是 Xcode 27.1 / Swift 6.4，**满足**，但需实测确认。
    - MPVKit：§7.2 记录的是**一次性、离线的验证性实验**（手工 `swiftc` 链接 29 个 xcframework）。该实验产物已清理，**任何人无法复现**，证据等级是「参考」而非「基线」。且该实验**没有验证窗口渲染**。
-2. **许可证风险已大幅降低，但未归零。** Prism 开源后，LGPL 的「提供源码/可重链接」义务通过「Prism 自身源码公开」自然满足。但仍有两条要注意：① AetherEngine 的 App Store 例外**只覆盖它自己的代码，不覆盖其依赖**（README 明示）；② 它的 FFmpeg 以**动态框架**形式分发（FFmpegBuild，LGPL-2.1），这条路径本来就合规。详见 §3.3。
+2. **许可证风险已大幅降低，但未归零。** Prism 开源后，LGPL 的「提供源码/可重链接」义务通过「Prism 自身源码公开」自然满足。但仍有两条要注意：① AetherEngine 的 App Store 例外**只覆盖它自己的代码，不覆盖其依赖**（README 明示）；② 它的 FFmpeg 以**动态框架**形式分发（FFmpegBuild，LGPL-2.1），这条路径本来就合规。详见 §3.4。
 3. **本文与 `docs/DECISION-mpv-license.md` 的关系已变化**：那份备忘是在「闭源 + MPVKit 静态库」前提下写的，**其结论（A/B/C 三方案）在开源 + AetherEngine 之后已基本失效**，仅作历史记录保留。若两者冲突，**以本文为准**。
 
 ---
@@ -102,13 +102,13 @@ Emby 的 HLS 输出**默认是 MPEG-TS**，除非客户端在 DeviceProfile 里�
 - 把 TranscodingProfile 的 `Container` 设为 `mp4` 后，Emby 4.9.5.0 起确实产出 `#EXT-X-MAP:URI=` + `.mp4` 分片（即 fMP4）。
 - 另有已知缺陷：ffmpeg 输出未打 `hvc1` tag，导致 AVKit 不认 HEVC。
 
-> ⚠️ 这是**社区实证**，不同 Emby 版本行为可能不同。**必须在真实服务器上验证**（§7.4 给了验证清单）。
+> ⚠️ 这是**社区实证**，不同 Emby 版本行为可能不同。**必须在真实服务器上验证**（§9.2 T5 给了验证方法）。
 
 ---
 
 ## 2. 候选引擎逐个核实
 
-### 2.1 MPVKit（`github.com/mpvkit/MPVKit`）
+### 2.1 MPVKit（`github.com/mpvkit/MPVKit`）—— **Plan B**
 
 #### 2.1.1 事实清单
 
@@ -210,7 +210,7 @@ MPVKit issue #77 / PR #78：用户发现**「LGPL 版」的 FFmpeg 构建带了 
 
 从原理上推断（**推断，非事实**）：MPVKit 的 Swift 表面为零（`Sources/_MPVKit/` 只有 `dummy.c` + `include/`），Swift 6 的严格并发检查**没有库内 Swift 代码可检查**，只作用于我们的 wrapper。`mpv_handle*` 是 `OpaquePointer`（非 Sendable），必须由我们自己做隔离。这也是 §5.1「零泄漏」约束的技术根因。
 
-### 2.2 VLCKit（`code.videolan.org/videolan/VLCKit`）
+### 2.2 VLCKit（`code.videolan.org/videolan/VLCKit`）—— Plan C
 
 | 项 | 值 | 来源 |
 |---|---|---|
@@ -390,18 +390,20 @@ README 同时明确一条**重要限制**：
 
 mpv 唯一不可替代的优势是 **libass 的排版完整度**（动漫特效字幕、复杂样式）。如果将来发现 AetherEngine 的 `.richText` 对某类 ASS 还原不够，可以**只对那类内容**降级到 MPVKit——但这属于 Plan B 的触发条件，不是默认路径。
 
-### 3.2 单引擎可行性判断
+### 3.3 单引擎可行性判断
 
 | 方案 | 能否单引擎 | 致命缺口 |
 |---|---|---|
 | 纯 AVPlayer | ❌ | MKV 打不开、DTS 解不了、ASS 渲染不了。对 Emby 库等于废掉大半 |
 | 纯 libmpv | 🟡 技术上可以 | **丢 AirPlay、丢 PiP、丢系统 HDR/DV 握手、丢自动 Now Playing**；且背 LGPL 静态链接问题 |
 | 纯 VLCKit | 🟡 技术上可以 | 丢系统 HDR/DV 握手、AirPlay 音频有 bug、TLS 1.3 缺失、922 MB 包、200 MB 体积 |
-| 纯 AetherEngine | 🟡 可能最优单引擎 | 未实测、单人维护、FFmpeg 源码构建 |
+| **纯 AetherEngine** | ✅ **可以，且是当前选择** | 未实测、单人维护、工具链门槛硬 |
 
-**这就是「不推翻双引擎」的核心论据**：没有任何单引擎能同时拿到「格式全覆盖」和「macOS 原生体验（AirPlay/PiP/HDR/Now Playing）」。这两组能力分属两个技术栈，物理上无法在一个引擎里兼得——除非像 AetherEngine 那样**在一个框架内部做双路径**（本质仍是双引擎，只是封装在别人家里）。
+**关键洞察**：没有任何单引擎能同时拿到「格式全覆盖」和「macOS 原生体验（AirPlay/PiP/HDR/Now Playing）」，因为这两组能力分属两个技术栈。**AetherEngine 的解法是在一个框架内部做双路径**——本质仍是双引擎，只是封装在第三方包内部，由它负责路由。这让「单引擎」在**我们这一层**成立。
 
-### 3.3 许可证：开源后义务已解除
+rev.2 选择「自己实现双引擎」，是因为当时不知道 AetherEngine 已经把这个模式产品化了。
+
+### 3.4 许可证：开源后义务已解除
 
 #### 前提变更
 
@@ -509,9 +511,9 @@ rev.2 的双引擎方案在技术上是成立的，但代价是：
 | `addExternalSubtitle(_:language:title:)` | `player.addExternalSubtitleTrack(ExternalSubtitleTrack(url:name:language:sourceStreamIndex:))` | 返回 `TrackInfo`，取其 `id` 作为我们的 `TrackID` |
 | `removeSubtitleTrack(_:)` | **无直接对应** | ⚠️ **缺口**：只有 `clearSubtitle()`（取消选中），没有移除已注册的外挂轨。**待验证** |
 | `setSubtitleDelay(_:)` | `player.setSoftwareSubtitleDelay(_:)` | ⚠️ **语义差异**：它只影响**软解路径合成进 PiP 帧**的字幕；原生路径的 AVPlayer rendition 不受影响（文档明示）。我们 UI 上必须说明 |
-| `setSubtitleStyle(_:)` | **无直接对应** | ⚠️ **缺口**：`.richText` 带样式但那是**字幕自带的**，不是用户偏好。用户改字号/颜色/描边**没有 API**。见下方「最大缺口」 |
+| `setSubtitleStyle(_:)` | **无直接对应，但也不需要** | ✅ 字幕是我们自己画的（§5.3.1），`SubtitleStyle` 由我们的渲染层消费，**不需要引擎 API**。见下方「缺口 2」 |
 | `state` | `player.$state` + `player.$playbackPhase` + `player.clock.$currentTime` 等 | **需要组合**：`$playbackPhase` 是最接近的单一真相源 |
-| `events` | 多个 `@Published` + `PassthroughSubject` | **需要桥接**：见 §4.5 |
+| `events` | 多个 `@Published` + `PassthroughSubject` | **需要桥接**：见 §4.4「缺口 1」 |
 | `makeVideoView()` | `AetherPlayerSurface(engine:)`（SwiftUI）或 `AetherPlayerView` + `player.bind(view:)` | ⚠️ **返回类型不匹配**：我们协议要 `NSView`，它给的是 SwiftUI `View`。**改协议**：让 `makeVideoView()` 返回 `AnyView`，或直接用 `AetherPlayerSurface` |
 | `supportsPictureInPicture` | 恒 `true`（原生路径）；软解路径看 `softwarePiPSource != nil` | 映射 |
 | `supportsAirPlay` | 恒 `true`（原生路径）；`$airPlayPictureStaysLocal` 表示软解路径只有声音过去 | 映射，**注意这个细分状态** |
@@ -545,9 +547,9 @@ func events() -> AsyncStream<PlaybackEvent> {
 
 **注意**：`AnyCancellable` 不是 `Sendable`，在 Swift 6 严格并发下需要小心。若报错，用 `@preconcurrency import Combine` 或把 sink 关在主 actor 上。
 
-**缺口 2：字幕样式（`setSubtitleStyle`）没有 API**
+**缺口 2：字幕样式（`setSubtitleStyle`）没有引擎 API——但这反而是优势**
 
-这是**产品级缺口**，不是适配问题。AetherEngine 的字幕是「引擎给你 cues，你自己画」的模式：
+这原本看起来是缺口，实际是**优势**：AetherEngine 的字幕是「引擎给你 cues，你自己画」的模式：
 - 文本 cue：`$subtitleCues` → `.text(String)` 或 `.richText([SubtitleTextRun])`，**你自己用 SwiftUI/TextKit 渲染**
 - 图形 cue：`.image(SubtitleImage)`
 
@@ -556,7 +558,7 @@ func events() -> AsyncStream<PlaybackEvent> {
 
 **缺口 3：`setVolume` / `setMuted` 未在文档中找到**
 
-README 和 `docs/api.md` 的 transport 段列了 `play/pause/togglePlayPause/setRate/seek/stop`，**没有音量**。两种可能：① 引擎不管音量（靠系统音量）；② 有 API 但没写进文档。**必须先查源码确认**，这是集成 spike 的第一件事。
+README 和 `docs/api.md` 的 transport 段列了 `play/pause/togglePlayPause/setRate/seek/stop`，**没有音量**。两种可能：① 引擎不管音量（靠系统音量）；② 有 API 但没写进文档。**必须先查源码确认**，这是集成 spike 的第二件事（§7.1 #2，仅次于「能否编译」）。
 
 ### 4.5 什么时候切回 MPVKit（Plan B 触发条件）
 
@@ -622,7 +624,7 @@ public struct MediaTrack: Identifiable, Hashable, Sendable {
     public let id: TrackID
     public let kind: TrackKind
     public let codec: String            // "h264" / "hevc" / "aac" / "dts" / "ass" / "hdmv_pgs_subtitle"
-    public let language: String?        // BCP-47 或 mpv 的 ISO 639-2
+    public let language: String?        // BCP-47（AetherEngine 用 BCP-47；mpv 用 ISO 639-2，适配层需转换）
     public let title: String?
     public let isDefault: Bool
     public let isForced: Bool
@@ -638,16 +640,37 @@ public struct MediaTrackSet: Sendable {
     public var all: [MediaTrack] { video + audio + subtitle }
 }
 
+/// 播放阶段。**这是 UI 的唯一真相源**，对应 AetherEngine 的 `$playbackPhase`。
+/// 不要用 `isPlaying` + `isBuffering` 自己拼——那会漏掉 `.stalled` / `.rebuffering` 的区别。
+public enum PlaybackPhase: Sendable, Equatable {
+    case idle
+    case loading
+    case playing
+    case paused
+    case seeking
+    case rebuffering
+    case stalled(reconnecting: Bool)
+    case ended
+    case failed(PlaybackFailureReason)
+}
+
 public struct PlaybackState: Sendable, Equatable {
-    public var isPlaying: Bool = false
-    public var isBuffering: Bool = false
+    public var phase: PlaybackPhase = .idle
+    /// 便于 SwiftUI 直接绑定；等价于 `phase == .playing`
+    public var isPlaying: Bool { phase == .playing }
+    /// 便于显示 spinner；覆盖 loading / rebuffering / stalled
+    public var isBuffering: Bool {
+        switch phase {
+        case .loading, .rebuffering, .stalled: return true
+        default: return false
+        }
+    }
     public var position: TimeInterval = 0
     public var duration: TimeInterval = 0
     public var bufferedPosition: TimeInterval = 0
     public var rate: Float = 1.0
     public var volume: Float = 1.0
     public var isMuted: Bool = false
-    public var didReachEnd: Bool = false
 
     public var progress: Double {
         guard duration > 0 else { return 0 }
@@ -660,6 +683,9 @@ public enum PlaybackEvent: Sendable {
     case tracksChanged(MediaTrackSet)
     case bufferStateChanged(isBuffering: Bool, bufferedPosition: TimeInterval)
     case didReachEnd
+    /// 字幕 cue 更新。**字幕由我们自己渲染**（AetherEngine 只给 cue），
+    /// 所以这条事件驱动我们的 SwiftUI 字幕层。见 §5.3.1。
+    case subtitleCuesChanged([SubtitleCue])
     case failed(PlaybackError)
     /// 引擎自愈失败，请求上层降级（见 §6.3 状态机）
     case requestsFallback(reason: PlaybackFailureReason)
@@ -711,7 +737,58 @@ public enum SubtitleAlignment: String, Sendable {
 }
 ```
 
-**映射到 mpv**（实测有效的选项名，见 §9.2）：
+#### 5.3.1 字幕 cue 与渲染归属
+
+**关键设计决定：字幕由我们渲染，不由引擎渲染。**
+
+AetherEngine 的模型是「引擎给 cue，宿主画」：
+```swift
+player.$subtitleCues  // [SubtitleCue]，body 为 .text / .richText([SubtitleTextRun]) / .image(SubtitleImage)
+```
+
+我们的中间表示：
+
+```swift
+public enum SubtitleCueBody: Sendable {
+    case text(String)
+    case richText([SubtitleTextRun])
+    /// PGS / DVB / DVD 图形字幕
+    case image(SubtitleImage)
+}
+
+public struct SubtitleTextRun: Sendable {
+    public var text: String
+    public var color: SubtitleColor?
+    public var bold: Bool
+    public var italic: Bool
+    public var underline: Bool
+    public var strikeout: Bool
+    public var fontName: String?
+    /// 相对字号（ASS 的 `s` 是相对 PlayResY 的，需按视频高度归一）
+    public var relativeSize: Double?
+}
+
+public struct SubtitleCue: Sendable {
+    public var start: TimeInterval
+    public var end: TimeInterval
+    public var body: SubtitleCueBody
+    /// numpad 对齐（1-9）+ 可选 [0,1] 锚点
+    public var placement: SubtitlePlacement?
+}
+```
+
+**为什么这是好事**：用户偏好（字号/颜色/描边/位置）**完全由我们的 `SubtitleStyle` 控制**，不需要依赖引擎的样式 API。这比 mpv 的 `sub-ass-style-overrides` 更灵活。
+
+**代价**：ASS 的复杂排版（精确定位、karaoke、特效）在 `.richText` 里只能近似。这是 §3.2 里 MPVKit 唯一胜出的维度。
+
+**渲染实现要点**：
+- 文本用 SwiftUI `Text` 拼 `AttributedString`（`SubtitleTextRun` → `AttributeContainer`）。
+- 图形 cue 用 `Image(nsImage:)` 叠加，注意按视频实际渲染尺寸缩放（不能按窗口尺寸）。
+- **对时用 `clock.$sourceTime`**（画面 PTS），不是 `clock.$currentTime`。
+
+---
+
+**Plan B（mpv）的样式映射**（若切到 MPVKit 才用；选项名见 §9.1 V19/V20）：
 
 | 我们的字段 | mpv 选项 | 备注 |
 |---|---|---|
@@ -731,8 +808,8 @@ import AppKit
 
 /// 引擎无关的播放抽象。
 ///
-/// 实现方必须是引用类型（class 或 actor）。所有方法在主 actor 上调用，
-/// 内部实现自行负责把工作搬到自己的串行队列。
+/// 实现方必须是引用类型。所有方法在主 actor 上调用；
+/// 具体实现（AetherEngine / MPVKit）自行负责内部隔离。
 @MainActor
 public protocol PlaybackEngine: AnyObject {
 
@@ -743,8 +820,9 @@ public protocol PlaybackEngine: AnyObject {
 
     // MARK: 生命周期
 
-    /// 加载媒体。`source` 是引擎无关的描述，由 EngineSelector 产出。
-    func load(_ source: PlaybackSource) async throws
+    /// 加载媒体。`source` 是引擎无关的描述。
+    /// `resumeAt` 用于降级时保留播放位置（§6.3 约束 1）。
+    func load(_ source: PlaybackSource, resumeAt position: TimeInterval?) async throws
 
     /// 卸载并释放底层资源。
     func unload() async
@@ -828,78 +906,89 @@ public enum PlaybackSource: Sendable {
 - 与 SwiftUI 的 `.task { for await ... }` 配合自然。
 - 避免 `@Published` 在主线程之外的写入问题。
 
-### 5.5 `EngineSelector` 选路策略
+### 5.5 引擎选择与降级策略
+
+> **重要变化**：rev.2 里 `EngineSelector` 的职责是「在 AVPlayer 和 libmpv 之间选路」。**AetherEngine 内部已经做了这件事**（`$videoRoute` 暴露它选了哪条），我们不再需要自己选路。
+>
+> 现在 `EngineSelector` 的职责收窄为两件事：① **决定用哪个 `PlaybackEngine` 实现**（正常情况恒为 AetherEngine）；② **失败后的降级决策**。
+
+#### 5.5.1 引擎实现选择（几乎恒定）
 
 ```swift
-public struct EngineSelection: Sendable {
-    public let kind: EngineKind
-    public let reason: SelectionReason
-    /// 若该引擎加载失败，按顺序尝试这些
-    public let fallbackChain: [EngineKind]
+public enum EngineKind: String, Sendable, Codable {
+    case aether       // 默认
+    case libmpv       // Plan B
+    case vlc          // Plan C（预留）
+    case mock         // 测试
 }
 
-public enum SelectionReason: String, Sendable {
-    case userPreference          // 用户显式指定
-    case containerRequiresLibmpv // MKV 等
-    case audioRequiresLibmpv     // DTS / TrueHD
-    case subtitleRequiresLibmpv  // ASS / SSA / PGS
-    case nativeOptimal           // MP4 + 兼容音频 + 无复杂字幕
-    case hlsDirectPlay           // 服务端给的 HLS
-    case lastKnownGood           // 上次成功的引擎
-    case forcedFallback          // 上一轮失败后的降级
-}
-
-/// 纯函数，无 I/O、无状态。可单元测试。
 public struct EngineSelector: Sendable {
-
     public struct Input: Sendable {
-        public let container: String              // "mkv" / "mp4" / "ts" ...
-        public let videoCodec: String?            // "h264" / "hevc" / "av1"
-        public let audioCodecs: [String]          // ["aac","ac3","dts"]
-        public let subtitleCodecs: [String]       // ["subrip","ass","hdmv_pgs_subtitle"]
-        public let isHLS: Bool
-        public let userPreference: UserEnginePreference
-        public let lastSuccessful: EngineKind?
-        /// 该设备 AVFoundation 是否认这个容器（来自能力探测缓存）
-        public let avFoundationCanOpenContainer: Bool
+        /// 用户设置里的引擎偏好（默认 .automatic）
+        public let preference: EngineKind?
+        /// 启动时探测到的 AetherEngine 可用性（编译期决定，缓存一次）
+        public let aetherAvailable: Bool
+        /// 上次会话是否因引擎问题失败
+        public let lastFailureWasEngineFault: Bool
     }
 
-    public enum UserEnginePreference: String, Sendable {
-        case automatic      // 默认
-        case preferNative   // 尽量 AVPlayer（可能牺牲格式）
-        case preferCompatibility  // 尽量 libmpv（画质/格式优先）
-        case forceNative
-        case forceCompatibility
+    public func selectEngine(_ input: Input) -> EngineKind {
+        if let p = input.preference { return p }
+        if input.aetherAvailable && !input.lastFailureWasEngineFault { return .aether }
+        return .libmpv   // 或 .vlc，取决于哪个已集成
     }
-
-    public func select(_ input: Input) -> EngineSelection
 }
 ```
 
-**选路规则（按优先级短路）：**
+**这个函数的价值不在「选路」，而在于**：把「引擎不可用时怎么办」这件事显式化，而不是散落在 UI 里。
 
+#### 5.5.2 降级决策（真正的复杂度在这里）
+
+AetherEngine 自己会在内部路由（native ↔ software），也会自己重连。**但有些失败它不会自动恢复**，需要我们决策。依据它的 `$errorInfo.PlaybackErrorKind`（README 明示「Classify on this」，不要解析 `error` 字符串——那是本地化文本）。
+
+```swift
+public enum FallbackAction: Sendable {
+    case retrySameSource          // 原地重试（网络抖动）
+    case requestHLSDirectStream   // 请求 Emby 只换容器（fMP4）
+    case requestHLSTranscode      // 请求 Emby 转码
+    case switchEngine(EngineKind) // 换引擎
+    case surfaceToUser(String)    // 放弃，给用户看
+}
+
+public struct FallbackPolicy: Sendable {
+    public func decide(errorKind: String,          // AetherEngine 的 PlaybackErrorKind.rawValue
+                       attempt: Int,
+                       source: MediaSourceInfo) -> FallbackAction
+}
 ```
-1. 用户强制 → 直接用，fallbackChain = [强制引擎]
-2. 用户偏好 preferNative 且 AVFoundation 能开容器、音频全兼容、字幕无 ASS/PGS
-   → avPlayer, reason = nativeOptimal
-3. 容器是 mkv/webm/avi 等 → libmpv, reason = containerRequiresLibmpv
-4. 音频含 dts/dts-hd/truehd/mlp → libmpv, reason = audioRequiresLibmpv
-5. 字幕含 ass/ssa/pgs/dvbsub → libmpv, reason = subtitleRequiresLibmpv
-6. isHLS 且容器/编码在 HLS 白名单内 → avPlayer, reason = hlsDirectPlay
-7. 其余 → avPlayer, reason = nativeOptimal
 
-fallbackChain 规则：
-- avPlayer 首选 → [avPlayer, libmpv]        （AVPlayer 失败就用 mpv 硬解）
-- libmpv 首选  → [libmpv, avPlayer]         （mpv 失败，若容器是 mp4 可回 AVPlayer）
-- 若 libmpv 也不可用（未集成/初始化失败）→ 只剩 avPlayer + 服务端转码
-```
+**降级阶梯（按 attempt 递进，最多 3 次）：**
 
-**关键设计点：**
+| attempt | 动作 | 触发条件 |
+|---|---|---|
+| 1 | `retrySameSource` | 网络类错误（连接断开、超时）；等 500ms |
+| 2 | `requestHLSDirectStream` | 解码/容器类错误；请求 Emby 用 `Container=mp4` 直封 |
+| 3 | `requestHLSTranscode` | 仍失败；请求 `VideoCodec=h264` + `AudioCodec=aac` 转码 |
+| 4 | `surfaceToUser` | 停在这里，**不要无限重试** |
 
-1. **选路发生在 `load` 之前，不在播放中切换。** 中途换引擎会黑屏 + 丢位置。切换只在「加载失败」时发生，且要**保留 `position` 并在新引擎上 seek 回去**。
-2. **`avFoundationCanOpenContainer` 来自能力探测，不是硬编码。** 用 `AVURLAsset.isPlayable` 异步探测一次并缓存（按 container + codec 组合做 key）。这样 Apple 未来若支持 MKV，我们自动受益。
-3. **`lastSuccessful` 用于学习**：同一部剧集连续 3 集用 libmpv 成功，第 4 集直接走 libmpv，省掉一次失败的探测。
-4. **用户偏好必须能覆盖一切**，但要在 UI 上说明代价（"强制原生可能无法播放此文件"）。
+**关键约束：**
+
+1. **每次降级保留 `position`**：切源前捕获，新源 `load(url:startPosition:)` 直接带过去。
+2. **退避**：attempt 2 前等 500ms，attempt 3 前等 1500ms。
+3. **上报 `PlayMethod`**：`POST /Sessions/Playing` 要如实填 `DirectPlay` / `DirectStream` / `Transcode`，否则服务器统计错误、用户也不知道为什么在转码。
+4. **降级不可逆**：一旦降到转码，本次会话保持转码，不要「好了再切回直连」（会造成二次缓冲）。
+5. **不要靠 `$state == .error` 的字符串判断原因**——用 `$errorInfo.PlaybackErrorKind`。
+
+#### 5.5.3 用户偏好
+
+| 偏好 | 行为 |
+|---|---|
+| 自动（默认） | 引擎自选路由；失败按 5.5.2 降级 |
+| 优先原生播放（省服务器） | `LoadOptions.nativeRemoteHLS = true`（若源是 HLS）；否则无区别 |
+| 优先兼容（保画质） | 不请求转码，宁可换引擎或提示用户 |
+| 强制直连 | 不允许任何转码；失败即报错 |
+
+> ⚠️ **注意**：AetherEngine 的「原生 vs 软解」路由**不是用户可选的**——它按编解码能力自动决定，`$videoRoute` 只读。用户偏好只能影响「我们向 Emby 请求什么」，不能影响引擎内部路由。
 
 ### 5.6 Now Playing 与远程控制
 
@@ -1135,61 +1224,64 @@ final class PrismMetalLayer: CAMetalLayer {
                     ┌──────────────┐
                     │   .idle      │
                     └──────┬───────┘
-                           │ user selects item
+                           │ 用户选中条目
                            ▼
-                    ┌──────────────┐
-                    │  .selecting  │  EngineSelector.select(input)
-                    └──────┬───────┘
+                    ┌──────────────────────────────┐
+                    │  .preparing                  │
+                    │  POST /Items/{id}/PlaybackInfo│
+                    │  拿到 MediaSources + 决策      │
+                    └──────┬───────────────────────┘
                            │
               ┌────────────┴────────────┐
               ▼                         ▼
      ┌─────────────────┐       ┌─────────────────┐
      │ .directPlay     │       │ .directStream   │
-     │ (原文件 URL)     │       │ (HLS 直封)      │
+     │ 原文件 URL 给引擎 │       │ HLS 直封 URL    │
      └────────┬────────┘       └────────┬────────┘
               │ 失败                     │ 失败
               ▼                          ▼
-     ┌──────────────────────────────────────────┐
-     │ .fallbackAttempt(attempt: 1..3)          │
-     │  attempt 1: 换引擎（avPlayer ↔ libmpv）   │
-     │  attempt 2: 请求 HLS 直封（只换容器）      │
-     │  attempt 3: 请求 HLS 转码（换视频+音频）   │
-     └──────────────┬───────────────────────────┘
+     ┌──────────────────────────────────────────────┐
+     │ .fallback(attempt: 1..3)                     │
+     │  attempt 1: 同源重试（网络类）                 │
+     │  attempt 2: 请求 HLS 直封（只换容器 → fMP4）   │
+     │  attempt 3: 请求 HLS 转码（h264 + aac）        │
+     └──────────────┬───────────────────────────────┘
                     │ 全部失败
                     ▼
              ┌──────────────┐
-             │  .failed     │  向用户展示具体原因 + 重试按钮
+             │  .failed     │  展示 $errorInfo 归类后的原因 + 重试按钮
              └──────────────┘
 
   任意状态 --用户停止--> .idle
   .directPlay/.directStream/.fallback --播放到结尾--> .ended
 ```
 
+> **与 rev.2 的差异**：rev.2 的 attempt 1 是「换引擎（avPlayer ↔ libmpv）」。现在只有一个引擎，**attempt 1 改为「同源重试」**（网络抖动占失败的大多数）。换引擎降为 Plan B 时的选项。
+
 **降级决策表（触发条件 → 动作）：**
 
-| 观测到的失败 | 判定 | 动作 |
+| 观测到的失败 | 判定（映射到 `PlaybackFailureReason`） | 动作 |
 |---|---|---|
-| `AVURLAsset` 打不开容器（MKV） | `containerUnsupported` | 换 libmpv |
-| 能打开但无视频轨 / 黑屏 | `videoCodecUnsupported` | 换 libmpv |
-| 有画面无声音，日志显示音频解码失败 | `audioCodecUnsupported` | 换 libmpv；若已是 libmpv → 请求转码音频 |
-| 字幕不显示（ASS 轨存在但无渲染） | `subtitleUnsupported` | 换 libmpv；若已是 libmpv → 请求 `SubtitleMethod=Encode` 烧录 |
-| HTTP 4xx/5xx | `serverRejected` | 刷新 PlaybackInfo 重取 URL（token 可能过期） |
-| 播放中卡死 > 15s 无进度 | `networkError` | 重连一次；再失败 → 降码率转码 |
-| 引擎进程/上下文崩溃 | `engineCrashed` | 重建引擎，从最后位置 seek 回去 |
-| 连续 3 次降级失败 | — | `.failed`，**不要无限重试** |
+| 引擎报容器/格式不支持 | `.containerUnsupported` | attempt 2：请求 HLS 直封 |
+| 能打开但无视频轨 / 黑屏 | `.videoCodecUnsupported` | attempt 3：请求转码 |
+| 有画面无声音 | `.audioCodecUnsupported` | attempt 3：请求转码（只转音频） |
+| 字幕不显示 | `.subtitleUnsupported` | 请求 `SubtitleMethod=Encode` 烧录 |
+| HTTP 4xx / 401 / 403 | `.serverRejected` | **重新** `POST /PlaybackInfo`（token 可能过期），不消耗 attempt |
+| 播放中卡死 > 15s 无进度 | `.networkError` | attempt 1：重试；再失败 → attempt 2 |
+| 引擎崩溃 / 上下文失效 | `.engineCrashed` | 重建引擎，从最后位置 `load(startPosition:)` |
+| 连续 3 次降级失败 | — | `.failed`，**停止重试** |
 
 **关键实现约束：**
 
-1. **每次降级必须保留播放位置**。`position` 在切引擎前捕获，新引擎 `load` 后立刻 `seek(to: position)`。
-2. **降级要有退避**：第 2 次降级前等 500ms，第 3 次前等 1500ms，避免服务端被连击。
-3. **降级结果要上报**（`POST /Sessions/Playing` 的 `PlayMethod` 字段：`DirectPlay` / `DirectStream` / `Transcode`），这样服务器端统计正确，用户也能在 Emby 面板看到"为什么在转码"。
-4. **降级不可逆**：一旦降级到转码，本次会话就保持转码，不要"好了再切回直连"（会造成二次缓冲）。
-
----
+1. **每次降级必须保留播放位置**：`position` 在切换前捕获，新源 `load(url:startPosition:)` 直接带过去。
+2. **退避**：attempt 2 前等 500ms，attempt 3 前等 1500ms。
+3. **上报 `PlayMethod`**：`POST /Sessions/Playing` 的 `PlayMethod` 必须与实际一致（`DirectPlay` / `DirectStream` / `Transcode`）。
+4. **降级不可逆**：一旦降到转码，本次会话保持转码。
+5. **用 `$errorInfo.PlaybackErrorKind` 分类**，不要解析 `$state` 里的 `.error(String)`——README 明说那个 message 是本地化的 AVFoundation 文本，「a substring rule over it buckets every non-English device as unknown」。
 
 ## 7. 最小可运行验证方案（1 天 spike）
 
-### 7.0 AetherEngine spike（**这是现在要做的那个**）
+### 7.1 AetherEngine spike（**这是现在要做的那个**）
 
 > ⚠️ **前提**：本节是**计划**，尚未执行。§7.2 是 MPVKit 的历史实验记录，保留作为 Plan B 参考。
 
@@ -1233,11 +1325,13 @@ final class AetherPlaybackEngine: PlaybackEngine {
         self.engine.ownsVideoNowPlayingSession = false   // macOS 上自己管
     }
 
-    func load(_ source: PlaybackSource) async throws {
+    func load(_ source: PlaybackSource, resumeAt position: TimeInterval?) async throws {
         guard case .url(let url, let headers) = source else {
             throw PlaybackError(reason: .unknown, underlyingDescription: "unsupported source", isRecoverable: false)
         }
-        try await engine.load(url: url, options: .init(httpHeaders: headers))
+        try await engine.load(url: url,
+                              startPosition: position,
+                              options: .init(httpHeaders: headers))
     }
 
     func videoSurface() -> AnyView { AnyView(AetherPlayerSurface(engine: engine)) }
@@ -1365,7 +1459,7 @@ client_api=131077  (mpv 2.5 => 2*65536+5 = 131077)
 | **窗口渲染（`gpu-next`+MoltenVK）** | ❌ **未跑通** |
 | **硬件解码（`hwdec-current`）** | ❌ 未验证（`vo=null` 下不解码） |
 
-> ⚠️ 上表「✅」的含义是「那次离线实验里观察到预期行为」，**不是「Prism 工程里已验证」**。产物已清理，不可复现，请按 §9.2 的待验证清单在 vendoring 落地后重做。
+> ⚠️ 上表「✅」的含义是「那次离线实验里观察到预期行为」，**不是「Prism 工程里已验证」**。产物已清理，不可复现，请按 §9.2 的待验证清单在集成落地后重做。
 
 **两个意外发现（必须写进实现要求）：**
 
@@ -1389,18 +1483,18 @@ final class MPVCore: @unchecked Sendable {
 - `nonisolated(unsafe)` 是**显式**的逃逸口，配合 `@unchecked Sendable` + 文档化的不变式，是 Swift 6 下包装 C 句柄的标准做法。
 - **不要**用 `actor`：mpv 的回调（`mpv_set_wakeup_callback`）来自内部线程，无法 `await` 进 actor，会造成死锁。
 
-### 7.4 1 天 spike 的排期
+### 7.4 MPVKit spike 排期（Plan B）
 
 | 时段 | 任务 | 产出 |
 |---|---|---|
-| 0–2h | 环境：按 §11 把 xcframework vendoring 进 `ThirdParty/MPVKit/`，`Package.swift` 用 `binaryTarget(path:)`，工程能编译 | `import Libmpv` 能过 |
+| 0–2h | 环境：按附录 A 把 xcframework vendoring 进 `ThirdParty/MPVKit/`，`Package.swift` 用 `binaryTarget(path:)`，工程能编译 | `import Libmpv` 能过 |
 | 2–4h | 加载 MKV，打印 `track-list`；验证音轨切换 | §7.2 的 [1][3] |
 | 4–5h | 外挂 ASS：`sub-add` + `sub-ass-override` + `sub-delay` | §7.2 的 [4] |
 | 5–8h | **渲染**：`wid` + `CAMetalLayer` + `gpu-next/moltenvk`，在 `NSViewRepresentable` 里出画面 | 一个能显示 MKV 画面的 SwiftUI 视图 |
 
-> **风险提示**：0–5h 的部分在一次性离线实验中观察到过预期行为（§7.2），但**未在工程内复现**。真正的未知在 5–8h 的渲染段——**该段从未跑通**。**如果渲染段 3 小时搞不定，立刻降级到 render API 方案，或直接放弃 mpv 路线**（回到 §4.3 的推翻条件）。
+> **风险提示**：0–5h 的部分在一次性离线实验中观察到过预期行为（§7.2），但**未在工程内复现**。真正的未知在 5–8h 的渲染段——**该段从未跑通**。**如果渲染段 3 小时搞不定，立刻降级到 render API 方案，或直接放弃 mpv 路线**（回到 §4.5 的 Plan B 触发条件）。
 
-### 7.5 渲染段代码骨架（未验证部分）
+### 7.5 MPVKit 渲染段代码骨架（Plan B，未验证部分）
 
 ```swift
 import SwiftUI
@@ -1482,7 +1576,7 @@ init(layer: CAMetalLayer) {
 
 > ⚠️ Demo 里 `target-colorspace-hint`（HDR 输出）是注释掉的，且注释写明「**不支持运行时修改，必须在 init 时设，否则会卡顿/挂起**」。我们若要 HDR，必须在 `mpv_initialize` 之前决定，不能做成运行时可切换的开关。
 
-### 7.6 渲染段的验证清单（给执行者）
+### 7.6 MPVKit 渲染段验证清单（Plan B，给执行者）
 
 跑通后请逐条确认：
 
@@ -1506,10 +1600,10 @@ init(layer: CAMetalLayer) {
 | ID | 风险 | 等级 | 影响 | 缓解 |
 |---|---|---|---|---|
 | **A1** | **单人维护 + AI 辅助**（README 自述 "vibe-coded ... with Claude"），87 个 open issues | 🔴 高 | 停更或维护质量下滑 → 无法跟进安全修复 | ① `PlaybackEngine` 零泄漏（§5.1）保证可换；② 锁 `.upToNextMinor`；③ 定期评估 issue 关闭速度 |
-| **A2** | **工具链门槛硬**：Swift 6.4 / Xcode 27.0 / **26.2+ SDK** | 🟠 中高 | CI 或开发机跟不上就无法构建 | ① spike 第一件事就是验证能否编译（§7.0 #1）；② CI 镜像锁定 `xcode-27` |
-| **A3** | **`setVolume` / `setMuted` 在文档中找不到** | 🟠 中高 | 若真的没有，音量只能靠系统音量，UX 不可接受 | spike 第二件事就是查源码（§7.0 #2）；若确实没有，评估能否用 `AVPlayer.volume` 透传或加 issue |
+| **A2** | **工具链门槛硬**：Swift 6.4 / Xcode 27.0 / **26.2+ SDK** | 🟠 中高 | CI 或开发机跟不上就无法构建 | ① spike 第一件事就是验证能否编译（§7.1 #1）；② CI 镜像锁定 `xcode-27` |
+| **A3** | **`setVolume` / `setMuted` 在文档中找不到** | 🟠 中高 | 若真的没有，音量只能靠系统音量，UX 不可接受 | spike 第二件事就是查源码（§7.1 #2）；若确实没有，评估能否用 `AVPlayer.volume` 透传或加 issue |
 | **A4** | **字幕样式无用户偏好 API**（只有字幕自带的 `.richText`） | 🟡 中 | 用户不能改字号/颜色/描边 | 字幕是我们自己画的 → 用自己的 SwiftUI 渲染层实现偏好；但要接受 ASS 复杂排版还原度不如 libass |
-| **A5** | **macOS 上 PiP 的 `AVSampleBufferDisplayLayer` 缩放 bug**（macOS 26.4 已记录，iOS 正常） | 🟡 中 | 软解路径的 PiP 画面只显示左下角一块 | ① 原生路径不受影响（用 `AVPlayerLayer`）；② spike 验证（§7.0 #6）；③ 若确认，软解路径禁用 PiP 并提示 |
+| **A5** | **macOS 上 PiP 的 `AVSampleBufferDisplayLayer` 缩放 bug**（macOS 26.4 已记录，iOS 正常） | 🟡 中 | 软解路径的 PiP 画面只显示左下角一块 | ① 原生路径不受影响（用 `AVPlayerLayer`）；② spike 验证（§7.1 #6）；③ 若确认，软解路径禁用 PiP 并提示 |
 | **A6** | **`traits` 与 XcodeGen 冲突**（2.45.4 静默丢弃 `traits:`） | 🟡 中 | 无法开启 TrueHD/DTS:X/DV-FEL 等可选组件 | ① 第一版全部保持默认关闭；② 若必须开，手工 patch `.pbxproj` 或包一层本地 package（README 给了两种做法） |
 | **A7** | **依赖链深**（4 个直接依赖，FFmpegBuild 含 9 个 binaryTarget + 约 45 MB dSYM） | 🟡 中 | 首次 clone/构建慢 | 实测后决定是否 vendoring；FFmpeg 动态框架 **macOS universal 约 22.7 MB** 是已知的 .app 增量 |
 | **A8** | **LGPL-3.0 传染性**：若我们修改 AetherEngine，修改部分需以 LGPL 发布 | 🟡 中 | 未来若想闭源商业化会受阻 | ① 不 fork、只提 issue/PR 上游；② 若必须改，接受开源该部分；③ 商业化前重新评估（§4.6） |
@@ -1628,11 +1722,11 @@ init(layer: CAMetalLayer) {
 | T8 | Xcode dead-strip 对 67.6 MB 的实际削减 | 未做 release 构建对比 | Release 构建后 `du -sh Prism.app` |
 | T9 | mpv 路径下 PiP 是否真的完全不可能 | 基于「mpv 渲染到 CAMetalLayer，非 AVSampleBufferDisplayLayer」的推断 | 尝试 streamyfin 的 `vo_avfoundation` fork（仅 iOS）或 render API 方案 |
 | T10 | `1.1.0-n9.0.2`（FFmpeg n9）是否有我们关心的修复 | 只看了 release notes，未读 n9 changelog | 读 FFmpeg n9 Changelog 的 demuxer/decoder 段 |
-| **T11** | **AetherEngine 能否在 Xcode 27.1 / Swift 6.4 / 26.2+ SDK 下编译** | 只读了 Requirements，未实际构建 | §7.0 #1：加依赖、`swift build` |
-| **T12** | **`setVolume` / `setMuted` 是否存在** | README 与 api.md 的 transport 段都没有；**不能据此断定不存在** | §7.0 #2：读 `Sources/AetherEngine/` 源码；或 grep `volume` |
+| **T11** | **AetherEngine 能否在 Xcode 27.1 / Swift 6.4 / 26.2+ SDK 下编译** | 只读了 Requirements，未实际构建 | §7.1 #1：加依赖、`swift build` |
+| **T12** | **`setVolume` / `setMuted` 是否存在** | README 与 api.md 的 transport 段都没有；**不能据此断定不存在** | §7.1 #2：读 `Sources/AetherEngine/` 源码；或 grep `volume` |
 | **T13** | **AetherEngine 的实际 .app 体积增量** | 只有 FFmpeg 的 22.7 MB 是已知数；引擎自身 + LibDovi + SMBClient 未测 | Release 构建后 `du -sh Prism.app`，与不含引擎的基线对比 |
 | **T14** | **AetherEngine 依赖链首次拉取体积与耗时** | 未实测 | spike 时记录 `swift package resolve` 的网络量与耗时 |
-| **T15** | **macOS 上 PiP 的缩放 bug 是否影响 AetherEngine 软解路径** | 该 bug 记录在 macOS 26.4 的 `AVSampleBufferDisplayLayer` PiP 上（Apple Forums），AetherEngine 软解路径正是用这个 layer | §7.0 #6：找一部 VP9/AV1 片源，开 PiP 看画面比例 |
+| **T15** | **macOS 上 PiP 的缩放 bug 是否影响 AetherEngine 软解路径** | 该 bug 记录在 macOS 26.4 的 `AVSampleBufferDisplayLayer` PiP 上（Apple Forums），AetherEngine 软解路径正是用这个 layer | §7.1 #6：找一部 VP9/AV1 片源，开 PiP 看画面比例 |
 | **T16** | **AetherEngine 的 ASS 渲染还原度 vs libass** | `.richText` 是近似，不是 libass 精确排版 | 用双语特效字幕样片对比 |
 | **T17** | **AetherEngine 在 macOS 上的 HDR/DV 实际表现** | 需要 HDR 屏 + DV 素材；且 api.md 明说 macOS 无 per-mode 能力表（`AVPlayer.availableHDRModes` 是 `API_UNAVAILABLE(macos)`） | 用 HDR10/DV 样片在 XDR 屏上看；必要时设 `panelPresentsDolbyVision` |
 
@@ -1718,7 +1812,7 @@ SwiftPM 拉取 GitHub 依赖时，会调用本机 git 的凭据助手。本机 `
 - 版本完全锁定，上游删 release 也不影响我们
 - 可审计：二进制在仓库里，`strings`/`otool` 随时可查（对应 §8-R8 的 nonfree 复核）
 
-代价：仓库体积显著增大（见 §11.4）。
+代价：仓库体积显著增大（见附录 A.4）。
 
 ### A.2 目录结构
 
@@ -1922,4 +2016,4 @@ EOF
 - **不解决许可证问题**。vendoring 只是改变了「二进制怎么来」，LGPL-3.0 静态链接的 4d0 义务（§3.3）依然存在。详见 `docs/DECISION-mpv-license.md`。
 - **不解决维护风险**。上游停更时，vendoring 反而让我们更难跟进（需要自己重新构建）。§8-R2 的「自建构建脚本」预案仍然需要。
 - **不解决渲染未验证**。§7.6 的清单仍然是必须做的。
-- **仓库体积代价真实存在**。若团队不接受 700 MB–1.3 GB，需要回到 §11.4 的单切片方案或 LFS。
+- **仓库体积代价真实存在**。若团队不接受 700 MB–1.3 GB，需要回到附录 A.4 的单切片方案或 LFS。

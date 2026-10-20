@@ -118,7 +118,106 @@ player.subtitleTracks / selectSubtitleTrack(index:) / $subtitleCues
 
 ---
 
-## 5. 待用户确认
+## 5. 主管实测结果（2026-10-21，已跑通）
+
+在 `.spike/engine/` 建了独立 spike 包（`.package(url: AetherEngine, exact: "7.44.0")`），
+用加固后的 git 环境（见 `docs/BUILD_ENV.md` §4.1）解析并构建。
+
+### 5.1 构建结果 ✅
+
+```
+Build complete! (30.71秒)
+```
+
+运行：
+
+```
+AetherEngine 构造成功
+状态: idle
+支持的最大倍速: 2.0
+是否支持缓存静帧: false
+```
+
+**全程零钥匙串弹窗。** 证明加固后的 git 环境对 SwiftPM 依赖解析同样有效。
+
+### 5.2 关键发现：FFmpeg 是**动态框架**，LGPL 合规天然满足 ✅
+
+`otool -L` 显示 spike 二进制链接的是：
+
+```
+@rpath/AetherLibavcodec.framework/Versions/A/AetherLibavcodec
+@rpath/AetherLibavformat.framework/Versions/A/AetherLibavformat
+@rpath/AetherLibavutil.framework/Versions/A/AetherLibavutil
+@rpath/AetherLibswresample.framework/Versions/A/AetherLibswresample
+@rpath/AetherLibswscale.framework/Versions/A/AetherLibswscale
+@rpath/AetherLibavfilter.framework/Versions/A/AetherLibavfilter
+@rpath/AetherLibdav1d.framework/Versions/A/AetherLibdav1d
+@rpath/AetherLibzimg.framework/Versions/A/AetherLibzimg
+@rpath/AetherLibzvbi.framework/Versions/A/AetherLibzvbi
+```
+
+**这是动态框架，不是静态库** —— 与 MPVKit（`current ar archive`，静态）形成鲜明对比。
+AetherEngine 的 README 也明确要求「FFmpeg 框架必须保持动态嵌入在 `YourApp.app/Frameworks/`，
+不能合并进主二进制」，这正是 LGPL 的精神。
+
+**结论：LGPL 合规是「按设计即可满足」，不需要任何额外工作**（我们本来就要逐个签名嵌入的 dylib）。
+
+### 5.3 体积实测（macOS arm64 slice）
+
+| 框架 | 类型 | arm64 大小 |
+|---|---|---|
+| AetherLibavcodec | 动态 | 6.1 MB |
+| AetherLibavformat | 动态 | 1.1 MB |
+| AetherLibswscale | 动态 | 1.1 MB |
+| AetherLibdav1d | 动态 | 0.8 MB |
+| AetherLibavutil | 动态 | 0.7 MB |
+| AetherLibzvbi | 动态 | 0.5 MB |
+| AetherLibavfilter | 动态 | 0.4 MB |
+| AetherLibzimg | 动态 | 0.3 MB |
+| AetherLibswresample | 动态 | 0.1 MB |
+| **合计** | | **≈ 11.1 MB** |
+
+- spike 可执行文件（含 AetherEngine 的 Swift 代码 + 我们的代码）：**25.3 MB**
+- **预计 .app 增量：约 35–45 MB**（11 MB 框架 + Swift 静态代码 + 资源），
+  远小于 MPVKit 路线。**DMG 预估 40–60 MB**。
+
+### 5.4 依赖解析成本（CI 规划用）
+
+```
+.build/repositories   422 MB      # git clone 总体积
+.build（含编译产物）  1.6 GB
+```
+
+**注意**：FFmpegBuild 把 9 个 `.xcframework` **直接放在源码树里**
+（`Sources/Aether*.xcframework` + `binaryTarget(path:)`），所以走的是**普通 git clone**，
+不涉及 Xcode 的二进制产物下载机制。
+
+四个仓库体积：`FFmpegBuild` 171 MB、`LibDovi` 160 MB、`SMBClient` 45 MB、`AetherEngine` 19 MB。
+
+- `SMBClient` 是 `AetherEngineSMB` target 的依赖，我们**不用**该 product，
+  `otool -L` 确认它**没有被链接**；但 SwiftPM 仍会 clone 它（45 MB 纯浪费）。
+- CI 必须缓存 `.build/repositories`，否则每次构建都要重新 clone 422 MB。
+
+### 5.5 已确认的待验证项
+
+| 项 | 状态 |
+|---|---|
+| `maxSupportedRate` = 2.0 | ✅ 实测确认（视频 2x） |
+| `supportsCacheBackedStills` = false | ✅ 实测（未启用 `DolbyVisionStillReshaping` trait） |
+| 音量 API | ⬜ 待查（协议里有 `setVolume`，AetherEngine 文档未见） |
+| 实际播放 MKV / ASS 字幕 | ⬜ 待 T1.8 用真实文件验证 |
+| 公证与 `@rpath` 重写 | ⬜ 待 M5 验证 |
+
+### 5.6 决策：现在**不**把 AetherEngine 加进主 `Package.swift`
+
+原因：SPM 会解析根包的全部依赖（不论哪个 target 用），一旦加入，
+每个 `swift build` 都要 clone 422 MB，拖慢当前并行开发的六个代理。
+**计划在 M3（播放波次）开始时才加**，同时把 `PrismPlayback` 拆成独立包
+（与工程化调研的 D2 建议一致）。
+
+---
+
+## 6. 待用户确认
 
 1. **引擎是否改用 AetherEngine？**（我建议改；不改则维持 MPVKit + 自研 PiP）
 2. **开源许可证选哪个？**（我建议 MIT）

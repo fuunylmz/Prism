@@ -62,26 +62,32 @@ mkdir -p \
 
 # ---------------------------------------------------------------- Git 凭据
 
-# 本机 ~/.gitconfig 里有：
-#     [credential "https://github.com"]
-#         helper =
-#         helper = !/opt/homebrew/bin/gh auth git-credential
-# 注意：空 helper 只是「清空列表」，下一行又把 gh helper 加回去了，所以**实际生效的是 gh helper**。
-# SwiftPM / git 解析远程依赖时会调用它去读钥匙串，**触发 macOS 钥匙串授权弹窗**（已发生两次事故）。
+# 本机**三层** git 配置都有 credential helper（2026-10-21 主管用
+# `git config --list --show-origin` 定位到根因）：
 #
-# 公开仓库不需要任何凭据。最彻底的做法是**完全绕开用户的全局 git 配置**：
+#   file:/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig
+#         credential.helper=osxkeychain                      ← 真正的元凶（系统级）
+#   file:~/.gitconfig
+#         credential.https://github.com.helper=              （空值 = 清空该 URL 的 helper 列表）
+#         credential.https://github.com.helper=!/opt/homebrew/bin/gh auth git-credential
+#
+# `osxkeychain` 在钥匙串里找到 github.com 条目后会向用户索取 ACL 授权，于是弹出
+# 「swift-package 想要使用你储存在钥匙串的 github.com 中的机密信息」。
+# 之前只屏蔽 global 是不够的——**必须连系统级一起屏蔽**。
+#
+# 公开仓库不需要任何凭据。三层一起关，并兜底清空 helper 列表：
 export GIT_TERMINAL_PROMPT=0
-export GIT_CONFIG_GLOBAL=/dev/null
-export GIT_CONFIG_SYSTEM=/dev/null
-# 兜底：即使某处仍读取本地配置，也把 helper 列表清空。
+export GIT_CONFIG_NOSYSTEM=1          # 官方开关：跳过 /etc 与 CLT 的 gitconfig
+export GIT_CONFIG_SYSTEM=/dev/null    # 同上，双保险
+export GIT_CONFIG_GLOBAL=/dev/null    # 跳过 ~/.gitconfig（gh helper 在这里）
 export GIT_CONFIG_COUNT=1
 export GIT_CONFIG_KEY_0=credential.helper
-export GIT_CONFIG_VALUE_0=
+export GIT_CONFIG_VALUE_0=            # 空值 = 清空 helper 列表
 
 # 若进程已经在弹窗里卡住，提示用户：**直接点「拒绝」即可**，公开仓库不需要凭据，
-# 拒绝后 git 会以匿名方式继续，构建不会失败。
+# 拒绝后 git 会以匿名方式继续（或干净失败），不会挂住，也不需要输入密码。
 prism_git_guard_note() {
-    prism_warn "若仍弹出「swift-package 想要使用钥匙串中的 github.com 机密信息」，直接点【拒绝】即可，不需要输入密码。"
+    prism_warn "若弹出「swift-package 想要使用钥匙串中的 github.com 机密信息」，直接点【拒绝】即可，不需要输入密码。"
 }
 
 # ---------------------------------------------------------------- 共用函数

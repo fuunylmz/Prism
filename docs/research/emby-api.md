@@ -4,6 +4,7 @@
 > **兼容目标**：Jellyfin 10.9+
 > **客户端技术栈**：Swift + URLSession + async/await（macOS 原生）
 > **文档版本**：2026-10-21
+> **配套文件**：[verified-facts.md](./verified-facts.md)（主管核查的基础事实库）、[playback.md](./playback.md)、[macos-engineering.md](./macos-engineering.md)
 > **编写原则**：每一条端点/参数/字段均标注来源 URL；无法从官方资料确认的一律标 `⚠️【待验证】`，并写明验证方法。
 
 ---
@@ -14,7 +15,7 @@
 
 | 标记 | 含义 | 处理方式 |
 |---|---|---|
-| ✅ | **已核实**：Emby 官方文档 / 官方 OpenAPI / 官方源码 明确写出 | 可直接实现 |
+| ✅ | **已核实**：Emby 官方 Reference 页 / REST 文档 / 官方源码 明确写出 | 可直接实现 |
 | ◐ | **社区一致**：多个真实客户端源码或抓包样例一致，但官方文档未明确 | 可实现，但需容错 |
 | ⚠️ | **待验证**：仅推断或资料冲突 | 必须先实测再依赖，文中给出验证方法 |
 
@@ -335,6 +336,7 @@ who is EmbyServer?
 | **Jellyfin** | `Who is JellyfinServer?` | `/socket` |
 
 - Jellyfin 侧来源（源码）：<https://github.com/jellyfin/Swiftfin/blob/530bc1c/Shared/ServerDiscovery/ServerDiscovery.swift>（`try self.connection?.sendBroadcast("Who is JellyfinServer?")`）
+- ⚠️ 注意：linuxserver 的 Jellyfin 文档写作 `Who is Jellyfin Server?`（带空格，<https://github.com/linuxserver/docker-jellyfin/blob/master/readme-vars.yml>），与 Swiftfin 源码**不一致**。以源码为准（无空格）；若要稳妥，两个都发。
 - 若 Prism 要同时发现两类服务器，**必须分别发两种报文**，各自解析。Emby 不会回应 Jellyfin 的报文，反之亦然（◐ 由两份实现推断，建议实测）。
 
 **实现要点**（Swift / Network.framework 或 BSD socket）：
@@ -1259,9 +1261,12 @@ profile.SubtitleProfiles.push({ Format: 'ass', Method: 'External' });
 
 ```
 读 MediaSources[i].SupportsDirectPlay  → 为 true 且容器/编码在本地白名单 → DirectPlay
-否则读 SupportsDirectStream            → 为 true 且只有容器不兼容       → DirectStream
-否则                                    → Transcode
+否则读 SupportsDirectStream            → 为 true                       → DirectStream
+否则                                                                     → Transcode
 ```
+
+> ⚠️ **注意**：这三个 `Supports*` 标志是**服务器根据你提交的 DeviceProfile 算出来的**，不是文件的固有属性。DeviceProfile 写错了，标志就会错，进而选错播放方式。
+> 所以调试顺序永远是：**先看 `TranscodeReasons`（6.6）→ 再改 DeviceProfile → 再看标志**。
 
 **本地白名单**（macOS + AVFoundation，需实测校准）：
 - 容器：`mp4`、`m4v`、`mov`（AVPlayer 原生）；`mkv` 需要自研 demux 或用第三方（如 libmpv/VLCKit）—— **若用 AVPlayer，mkv 一律不能 DirectPlay**。
@@ -1747,7 +1752,7 @@ ws(s)://{host}:{port}/embywebsocket?api_key={token}&deviceId={deviceId}
 
 #### ⚠️ `PlaybackStopped` / `PlaybackStart` —— 不要依赖
 
-任务书里提到 `PlaybackStopped`，但**核实结果如下**：
+需求里提到 `PlaybackStopped`，但**核实结果如下**：
 
 - ❌ Emby 官方 Web-Socket 文档的 MessageType 列表里**没有** `PlaybackStart` / `PlaybackStopped`。
 - ◐ 但社区代码里确实出现过：Kodi 插件脚本判断 `job['MessageType'] == "PlaybackStopped"` / `"PlaybackStart"`，并读 `Data.NowPlayingItem.Type/SeriesName/IndexNumber`（来源：<https://emby.media/community/topic/52903-library-information>，2017 年）。
@@ -1910,7 +1915,7 @@ POST /emby/Playlists/{id}/Items/{itemId}/Move/{newIndex}
 - ✅ API 未改名：Emby OpenAPI 中仍是 `/Sync/Jobs`、`/Sync/JobItems` 等（<https://swagger.emby.media/openapi.json>）
 - ⚠️ **"从哪个版本开始改名"未在官方资料中说明** —— 本文只能说"当前（4.8/4.9 时期）官方文档用 Downloads & Sync 这个名字"。若需要确切版本号，需查各版本 release notes。
 
-**⚠️ 路径名纠正**：任务书里写的 `/Sync/Job`（单数）**不存在**。实际是复数 **`/Sync/Jobs`**（已逐一比对 OpenAPI 的 356 条 path）。
+**⚠️ 路径名纠正**：需求里写的 `/Sync/Job`（单数）**不存在**。实际是复数 **`/Sync/Jobs`**（已逐一比对 OpenAPI 的 356 条 path）。
 
 **前置条件**：Sync 需要客户端声明 `SupportsSync=true` 并提供 `DeviceProfile`，且用户 `Policy.EnableSync=true`。
 
@@ -2064,7 +2069,7 @@ DELETE /emby/Users/{userId}/Items/{itemId}/Rating                → 清除评�
 - ✅ 来源：<https://swagger.emby.media/openapi.json> → `/Users/{UserId}/Items/{Id}/Rating`（`post` 有 `Likes` query 参数；`delete` 无参数）
 - ✅ 页面：<https://dev.emby.media/reference/RestAPI/UserLibraryService/postUsersByUseridItemsByIdRating.html>
 
-> ⚠️ **路径纠正**：任务书里写的 `/Items/{id}/Rating` 在 Emby 4.x 的 OpenAPI 中**不存在**（已逐一比对 356 条 path）。正确路径必须带 `Users/{userId}` 前缀：`/Users/{UserId}/Items/{Id}/Rating`。
+> ⚠️ **路径纠正**：需求里写的 `/Items/{id}/Rating` 在 Emby 4.x 的 OpenAPI 中**不存在**（已逐一比对 356 条 path）。正确路径必须带 `Users/{userId}` 前缀：`/Users/{UserId}/Items/{Id}/Rating`。
 
 ### 12.4 统一更新用户数据（批量）✅
 
@@ -2201,7 +2206,8 @@ GET /emby/Users/{userId}/Items/Latest
 - 用 `StartIndex` + `Limit` 分页；`TotalRecordCount` 是**过滤后总数**。
 - 坑 1：`Latest` 端点**没有** `TotalRecordCount`，返回裸数组，**不能分页**。
 - 坑 2：`Limit` 过大（如 10000）会导致服务器超时/内存暴涨。**建议 ≤ 200**。
-- 坑 3：不带 `Limit` 时服务器有默认上限（⚠️ 具体值未在文档说明，实测通常 100–1000 不等）—— 永远显式传 `Limit`。
+- 坑 3：不带 `Limit` 时服务器有默认上限（⚠️【待验证】具体值官方未说明，社区经验在 100–1000 之间）—— **永远显式传 `Limit`**。
+- 坑 4：`StartIndex` 超过 `TotalRecordCount` 时返回空数组而非报错，不要据此判断接口出错。
 
 ### 14.5 转码 URL 里的 `api_key` 与 `deviceId` 必须一致
 
@@ -2369,20 +2375,20 @@ f2.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
 | 14 | `SortBy`/`SortOrder` 逗号分隔且位置对应 | <https://dev.emby.media/doc/restapi/Browsing-the-Library.html> |
 | 15 | 列表默认字段被裁剪，需 `Fields` 显式请求 | 同上 |
 | 16 | `QueryResult` 含 `Items` + `TotalRecordCount` | <https://dev.emby.media/reference/RestAPI/ItemsService/getUsersByUseridItems.html> |
-| 17 | `BaseItemDto` / `UserItemDataDto` / `BaseItemPerson` / `ChapterInfo` 字段 | <https://swagger.emby.media/openapi.json> |
+| 17 | `BaseItemDto` / `UserItemDataDto` / `BaseItemPerson` / `ChapterInfo` 字段 | <https://dev.emby.media/reference/RestAPI/ItemsService/getUsersByUseridItems.html>（当前版本，163 个 BaseItemDto 字段）；<https://dev.emby.media/reference/RestAPI/UserLibraryService/postUsersByUseridItemsByIdRating.html>（UserItemDataDto） |
 | 18 | 条目字段语义（`IndexNumber`、`ParentIndexNumber`、`SeriesId`、`ImageTags`、`BackdropImageTags`、`UserData`…） | <https://dev.emby.media/doc/restapi/Item-Information.html> |
 | 19 | `POST /Items/{Id}/PlaybackInfo` 请求体 `PlaybackInfoRequest` 字段全集；**Emby 侧只接受 body，无 query 参数** | <https://swagger.emby.media/openapi.json>；<https://dev.emby.media/reference/RestAPI/MediaInfoService/postItemsByIdPlaybackinfo.html> |
 | 20 | `DeviceProfile` 及其子结构（`DirectPlayProfile`/`TranscodingProfile`/`CodecProfile`/`ProfileCondition`/`SubtitleProfile`/`ResponseProfile`）字段与枚举 | <https://dev.emby.media/reference/pluginapi/MediaBrowser.Model.Dlna.DeviceProfile.html>；<https://swagger.emby.media/openapi.json> |
 | 21 | DeviceProfile 的 DLNA 专属属性可省略 | <https://dev.emby.media/doc/restapi/Sync.html> |
 | 22 | `PlaybackInfoResponse{MediaSources, PlaySessionId, ErrorCode}` | <https://swagger.emby.media/openapi.json> |
-| 23 | `MediaSourceInfo` 含 `DirectStreamUrl`、`TranscodingUrl`、`TranscodingSubProtocol`、`TranscodingContainer` | <https://dev.emby.media/reference/pluginapi/MediaBrowser.Model.Dto.MediaSourceInfo.html> |
+| 23 | `MediaSourceInfo` 含 `DirectStreamUrl`、`TranscodingUrl`、`TranscodingSubProtocol`、`TranscodingContainer`、`Chapters`（共 49 个字段） | <https://dev.emby.media/reference/pluginapi/MediaBrowser.Model.Dto.MediaSourceInfo.html>；<https://dev.emby.media/reference/RestAPI/MediaInfoService/postItemsByIdPlaybackinfo.html> |
 | 24 | Direct Play / Direct Stream / Transcode 定义与选择算法 | <https://dev.emby.media/doc/restapi/Playback-Guidelines.html> |
 | 25 | `static=true` 表示直封；转码时 seek 需用 `StartTimeTicks` 重新请求 | <https://dev.emby.media/doc/restapi/Video-Streaming.html> |
 | 26 | HLS 入口 `/Videos/{Id}/master.m3u8`，必需 `MediaSourceId`、`DeviceId` | <https://dev.emby.media/doc/restapi/Http-Live-Streaming.html> |
 | 27 | 播完需 `DELETE /Videos/ActiveEncodings?DeviceId=` | 同上 |
 | 28 | HLS 分片路径 `/Videos/{Id}/hls/{PlaylistId}/{SegmentId}.{SegmentContainer}` | <https://dev.emby.media/reference/RestAPI/VideoHlsService/getVideosByIdHlsByPlaylistidBySegmentidBySegmentcontainer.html> |
 | 29 | `/Sessions/Playing`、`/Progress`、`/Stopped` 三端点及 `PlayMethod` 取值 | <https://dev.emby.media/doc/restapi/Playback-Check-ins.html> |
-| 30 | `PlaybackStartInfo` / `PlaybackProgressInfo` / `PlaybackStopInfo` 字段全集 | <https://swagger.emby.media/openapi.json>；<https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlaying.html> |
+| 30 | `PlaybackStartInfo`（30 字段）/ `PlaybackProgressInfo`（30 字段，与前者完全相同）/ `PlaybackStopInfo`（14 字段） | <https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlaying.html>；<https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlayingProgress.html>；<https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlayingStopped.html> |
 | 31 | `ProgressEvent` 枚举（16 值） | <https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlayingProgress.html> |
 | 32 | 进度上报节奏：10s + 交互即时；服务器每秒自增 | <https://dev.emby.media/doc/restapi/Playback-Check-ins.html> |
 | 33 | `ItemId` 与 `Item` 二选一 | 同上 |
@@ -2420,9 +2426,10 @@ f2.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
 | 5 | Emby 也接受 `device_id`（下划线）参数 | Kodi 插件日志：<https://emby.media/community/topic/80061-httpconnectionpool-read-timed-out> |
 | 6 | 自建直封 URL 模板 `/Videos/{id}/stream?static=true&MediaSourceId=...` | 多个第三方客户端实现，如 <https://github.com/AkimioJR/MediaWarp> |
 | 7 | 官方 Swagger 的 "1 tick = 10000 ms" 是错的，正确为 100ns | 由 `RunTimeTicks` 实测量级反证（90 分钟电影 ≈ 5.4e10 ticks） |
-| 8 | Emby 4.8+ UI 改称 "Downloads"，但 API 仍是 `/Sync/*` | <https://support.emby.media/support/articles/Sync.html> + OpenAPI 仍含 `/Sync/*` |
+| 8 | 官方支持站产品名已是 "Downloads & Sync"，但 API 仍是 `/Sync/*`（改名起始版本未查到） | <https://support.emby.media/support/articles/Sync.html> + OpenAPI 仍含 `/Sync/*` |
 | 9 | 对 Series 标记已看会级联到所有集 | 社区普遍行为，官方文档未写 |
-| 10 | `POST /Sessions/Playing/Stopped` 发多余字段不会报错 | .NET `System.Text.Json` 默认忽略未知字段 |
+| 10 | `POST /Sessions/Playing/Stopped` 发多余字段不会报错 | .NET `System.Text.Json` 默认忽略未知字段（推断，未实测） |
+| 15 | `swagger.emby.media/openapi.json` 版本是 4.1.1.0，落后于当前 Reference | 文件自身 `info.version`；与 Reference 逐 schema 比对得出字段数差异 |
 | 11 | 根路径（无 `/emby` 前缀）也可访问 API | 反向代理配置把 `/` 直接代理到 8096 且工作：<https://emby.media/community/topic/40461-emby-server-with-apache-reverse-proxy> |
 | 12 | Emby 服务器也接受 `/socket` 路径 | 第三方实测博客：<https://stevenwinkelman.com/projects/emby-plugin>（2026-08） |
 | 13 | **`DirectStreamUrl` 在需要转码时也会返回**，且常与 `TranscodingUrl` 相同 → 不能当作直封能力标志 | Emby 真实会话 JSON：<https://emby.media/community/topic/92430-session-playstate-mediasourceid-session-fullplayingitemgetmediasources>（`SupportsDirectStream:false` 却有 `DirectStreamUrl`） |
@@ -2450,17 +2457,22 @@ f2.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
 | 16 | Resume 的"看完"判定阈值 | 低 | 播到 90%/95%/99% 分别停止，看是否移出 Resume |
 | 17 | HLS seek 后 `PlaySessionId` 是否应复用 | 中：复用错会导致进度错乱 | seek 后用同一/新 PlaySessionId 各测一次，看 dashboard 与进度 |
 | 18 | WebSocket `KeepAlive` 消息是否由 Emby 发出 | 低 | 空转 5 分钟，记录收到的心跳 |
+| 19 | `UserItemDataDto.Likes` 在 4.8/4.9 是否仍返回 | 中：影响「喜欢」按钮状态 | POST `/Users/{id}/Items/{id}/Rating?Likes=true`，检查返回 DTO 的 keys |
+| 20 | `ParentArtItemId`/`ParentArtImageTag` 在 4.8/4.9 是否仍返回 | 低：Art 图回退 | 拉一个 Season 详情，`jq '.ParentArtItemId'` |
 
 ### 16.4 已知文档缺陷汇总（供后续维护）
 
 | 缺陷 | 位置 | 影响 |
 |---|---|---|
+| **`swagger.emby.media/openapi.json` 是 4.1.1.0 旧快照**，比当前 Reference 少字段（`PlaybackStartInfo` 21 vs 30） | <https://swagger.emby.media/openapi.json>（`info.version`） | **严重**：据此生成模型会丢字段 |
 | Ticks 单位写成 "1 tick = 10000 ms" | <https://dev.emby.media/reference/RestAPI/VideoService/getVideosByIdStream.html> | 严重：进度条全错 |
 | `AuthenticationResult.User` 标为数组 | <https://dev.emby.media/reference/RestAPI/UserService/postUsersAuthenticatebyname.html> | 解码崩溃 |
 | `Fields` 参数说明只列 17 项（实际 97 项） | <https://dev.emby.media/reference/RestAPI/ItemsService/getUsersByUseridItems.html> | 漏字段 |
 | `/Audio/{Id}/universal` OpenAPI 只列 3 个参数 | <https://swagger.emby.media/openapi.json> | 音乐转码参数找不到 |
 | Web-Socket 文档未写订阅机制 | <https://dev.emby.media/doc/restapi/Web-Socket.html> | 收不到 Sessions |
-| `PlaybackStopInfo` schema 字段少于文档描述 | <https://swagger.emby.media/openapi.json> vs <https://dev.emby.media/doc/restapi/Playback-Check-ins.html> | 不知道发什么 |
+| `PlaybackStopInfo` 只有 14 字段，但文档说与 Start「完全相同」 | <https://dev.emby.media/reference/RestAPI/PlaystateService/postSessionsPlayingStopped.html> vs <https://dev.emby.media/doc/restapi/Playback-Check-ins.html> | 不知道发什么 |
+| `UserItemDataDto` 里 `Likes` 在 Reference 中缺失、在 OpenAPI 中存在 | <https://dev.emby.media/reference/RestAPI/UserLibraryService/postUsersByUseridItemsByIdRating.html> vs <https://swagger.emby.media/openapi.json> | 喜欢状态读不到 |
+| `ParentArtItemId`/`ParentArtImageTag` 已不在当前 `BaseItemDto`，但 Images 文档仍列 | <https://dev.emby.media/doc/restapi/Images.html> vs <https://dev.emby.media/reference/RestAPI/ItemsService/getUsersByUseridItems.html> | Art 图回退失效 |
 | Sync 客户端实现文档 "Coming soon" | <https://dev.emby.media/doc/restapi/Sync.html> | 无官方实现指南 |
 | `PlaybackStartInfo` 文档有 `QueueableMediaTypes`，schema 无 | 同上 | 多发字段 |
 | Latest 文档说支持 StartIndex，OpenAPI 标为数组 | <https://dev.emby.media/doc/restapi/Latest-Items.html> | 分页歧义 |
@@ -2562,6 +2574,10 @@ extension JSONDecoder {
 - [ ] 播放结束调 `DELETE /Videos/ActiveEncodings`
 - [ ] 进度上报 10s 一次 + 交互即时
 - [ ] WebSocket 连上后发 `SessionsStart`
+- [ ] 直封判定用 `SupportsDirectStream`，**不是** `DirectStreamUrl` 是否存在
+- [ ] `PlaybackStopInfo` 按 14 字段发（不要塞 `PlayMethod`）
+- [ ] `UserData.Likes` 解码为 `Bool?` 且允许缺失
+- [ ] 解码模型用 Reference 字段表，**不要**用 `swagger.emby.media/openapi.json`（4.1.1.0 旧快照）
 - [ ] 401 统一跳登录页
 
 ---

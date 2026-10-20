@@ -1,0 +1,159 @@
+import Foundation
+import PrismCore
+import Testing
+
+@testable import EmbyAPI
+
+@Suite("鉴权头与令牌")
+struct ClientAuthTests {
+    private let expectedWithoutToken =
+        #"Emby Client="Prism", Device="TestMac", DeviceId="TEST-DEVICE-ID", Version="1.0.0""#
+
+    @Test("有 token：鉴权头逐字段正确，并额外带 X-Emby-Token")
+    func headerWithToken() async throws {
+        let mock = MockServer(.json(#"{"Id":"u1","Name":"Alice"}"#))
+        let client = await TestFixtures.client(mock: mock, token: "TKN-123", userId: "u1")
+
+        let payload: TestPayload = try await client.send(TestEndpoint(path: "/Users/Me"))
+        #expect(payload.id == "u1")
+
+        let request = try #require(mock.requests.first)
+        let header = try #require(request.value(forHTTPHeaderField: "X-Emby-Authorization"))
+
+        #expect(
+            header
+                == #"Emby UserId="u1", Client="Prism", Device="TestMac", #
+                + #"DeviceId="TEST-DEVICE-ID", Version="1.0.0", Token="TKN-123""#
+        )
+        // 逐字段断言，避免「整串相等但字段顺序/空格错了也过」。
+        #expect(header.hasPrefix("Emby "))
+        #expect(header.contains(#"UserId="u1""#))
+        #expect(header.contains(#"Client="Prism""#))
+        #expect(header.contains(#"Device="TestMac""#))
+        #expect(header.contains(#"DeviceId="TEST-DEVICE-ID""#))
+        #expect(header.contains(#"Version="1.0.0""#))
+        #expect(header.contains(#"Token="TKN-123""#))
+        #expect(request.value(forHTTPHeaderField: "X-Emby-Token") == "TKN-123")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
+    @Test("无 token：省略 Token= 与 UserId=，其余字段保留")
+    func headerWithoutToken() async throws {
+        let mock = MockServer(.json(#"{"Id":"srv","ServerName":"Emby"}"#))
+        let client = await TestFixtures.client(mock: mock)
+
+        let _: TestPayload = try await client.send(
+            TestEndpoint(path: "/System/Info/Public", requiresAuth: false)
+        )
+
+        let request = try #require(mock.requests.first)
+        let header = try #require(request.value(forHTTPHeaderField: "X-Emby-Authorization"))
+
+        #expect(header == expectedWithoutToken)
+        #expect(!header.contains("Token="))
+        #expect(!header.contains("UserId="))
+        #expect(header.contains(#"Client="Prism""#))
+        #expect(header.contains(#"Device="TestMac""#))
+        #expect(header.contains(#"DeviceId="TEST-DEVICE-ID""#))
+        #expect(header.contains(#"Version="1.0.0""#))
+        #expect(request.value(forHTTPHeaderField: "X-Emby-Token") == nil)
+    }
+
+    @Test("headerValue 直接调用：有/无 token 两种形态")
+    func headerValueDirect() {
+        let header = AuthHeader(identity: TestFixtures.identity())
+
+        #expect(header.headerValue(userId: nil, token: nil) == expectedWithoutToken)
+        #expect(
+            header.headerValue(userId: "u1", token: "TKN")
+                == #"Emby UserId="u1", Client="Prism", Device="TestMac", #
+                + #"DeviceId="TEST-DEVICE-ID", Version="1.0.0", Token="TKN""#
+        )
+        // 只有 token 没有 userId：保留 Token，省略 UserId。
+        #expect(
+            header.headerValue(userId: nil, token: "TKN")
+                == #"Emby Client="Prism", Device="TestMac", DeviceId="TEST-DEVICE-ID", #
+                + #"Version="1.0.0", Token="TKN""#
+        )
+    }
+
+    @Test("设备名里的引号/换行不会破坏头结构")
+    func sanitizesDeviceName() {
+        let header = AuthHeader(
+            client: "Prism",
+            device: "Bob \"Mac\"\nMini",
+            deviceId: "D1",
+            version: "1.0.0"
+        )
+        let value = header.headerValue(userId: nil, token: nil)
+        #expect(value == #"Emby Client="Prism", Device="Bob Mac Mini", DeviceId="D1", Version="1.0.0""#)
+        #expect(!value.contains("\n"))
+    }
+
+    @Test("requiresAuth 且无 token：抛 unauthorized 且一个请求都不发")
+    func unauthorizedWithoutToken() async throws {
+        let mock = MockServer(.json(#"{"Id":"u1","Name":"Alice"}"#))
+        let sleeper = RecordingSleeper()
+        let client = await TestFixtures.client(mock: mock, sleeper: sleeper)
+
+        await #expect(throws: EmbyError.unauthorized) {
+            let _: TestPayload = try await client.send(TestEndpoint(path: "/Users/Me"))
+        }
+        #expect(mock.requestCount == 0)
+        #expect(mock.handlerCallCount == 0)
+        #expect(sleeper.sleeps.isEmpty)
+    }
+
+    @Test("requiresAuth == false 时无 token 也照常发请求")
+    func publicEndpointWithoutToken() async throws {
+        let mock = MockServer(.json(#"{"Id":"u1","Name":"Alice"}"#))
+        let client = await TestFixtures.client(mock: mock)
+
+        let payload: TestPayload = try await client.send(
+            TestEndpoint(path: "/System/Info/Public", requiresAuth: false)
+        )
+        #expect(payload.name == "Alice")
+        #expect(mock.requestCount == 1)
+    }
+
+    @Test("setAccessToken(nil) 后重新变为未授权")
+    func clearingToken() async throws {
+        let mock = MockServer(.json(#"{"Id":"u1","Name":"Alice"}"#))
+        let client = await TestFixtures.client(mock: mock, token: "TKN")
+        await client.setAccessToken(nil)
+
+        await #expect(throws: EmbyError.unauthorized) {
+            let _: TestPayload = try await client.send(TestEndpoint(path: "/Users/Me"))
+        }
+        #expect(mock.requestCount == 0)
+    }
+
+    @Test("setSession 同时写入 token 与 userId")
+    func setSession() async throws {
+        let mock = MockServer(.json(#"{"Id":"u1","Name":"Alice"}"#))
+        let client = await TestFixtures.client(mock: mock)
+
+        let session = AuthSession(
+            serverId: "srv-test",
+            userId: "u9",
+            accessToken: "TKN-9",
+            user: EmbyUser(id: "u9", name: "Nine", serverId: "srv-test")
+        )
+        await client.setSession(session)
+
+        let _: TestPayload = try await client.send(TestEndpoint(path: "/Users/Me"))
+        let request = try #require(mock.requests.first)
+        let header = try #require(request.value(forHTTPHeaderField: "X-Emby-Authorization"))
+        #expect(header.contains(#"UserId="u9""#))
+        #expect(header.contains(#"Token="TKN-9""#))
+        #expect(request.value(forHTTPHeaderField: "X-Emby-Token") == "TKN-9")
+    }
+
+    @Test("baseURL 与服务器连接一致")
+    func exposesBaseURL() async {
+        let mock = MockServer(.json("{}"))
+        let client = await TestFixtures.client(mock: mock, baseURL: "https://domain/emby")
+        let baseURL = client.baseURL
+        #expect(baseURL.absoluteString == "https://domain/emby")
+    }
+}
