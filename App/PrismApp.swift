@@ -1,5 +1,7 @@
 import SwiftUI
 import PrismUI
+import PrismCore
+import EmbyAPI
 
 /// Prism 的应用入口。
 ///

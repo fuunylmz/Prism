@@ -49,6 +49,20 @@ public struct RootShell: View {
     public var body: some View {
         AppShellView(model: model, session: session)
             .prismTheme(theme)
+            .posterImageLoader(imageLoader)
             .focusedSceneValue(\.navigationModel, model)
+    }
+
+    /// 海报加载器：演示模式用代码生成的渐变图，真实模式用带鉴权头的图片管线。
+    ///
+    /// 两者都实现 `PosterImageLoading`，页面代码不需要知道用的是哪一个。
+    private var imageLoader: any PosterImageLoading {
+        if session?.isDemo == true {
+            return DemoImageLoader()
+        }
+        if let session {
+            return session.imageLoader
+        }
+        return PlaceholderImageLoader()
     }
 }

@@ -11,8 +11,10 @@ import SwiftUI
 ///   同时不让列表整体跳动（`withAnimation` + `scrollTo`，而不是重建视图）；
 /// - 支持键盘 `←` `→` 切换：焦点在季选择器上时按方向键即换季。
 ///
-/// 键盘处理依赖视图获得焦点：macOS 上先用 Tab / 点击聚焦到季选择器，
-/// 之后 `←` `→` 才生效——这符合 HIG「键盘焦点必须先可见」的要求。
+/// 键盘处理依赖视图获得焦点：macOS 上按 Tab 或点击季选择器即可聚焦，
+/// 之后 `←` `→` 生效。chip 本身**不参与** Tab 焦点（`focusable(false)`），
+/// 整条选择器是一个焦点单元；否则 Tab 会逐个停在 chip 上，方向键被按钮吞掉。
+/// 系统焦点环保留（不调用 `focusEffectDisabled`），键盘用户能看见焦点在哪。
 ///
 /// ```swift
 /// SeasonPicker(
@@ -77,7 +79,6 @@ public struct SeasonPicker: View {
         }
         .focused($isFocused)
         .focusable()
-        .focusEffectDisabled()
         .onKeyPress(.leftArrow) {
             moveSelection(by: -1)
             return .handled
@@ -133,6 +134,10 @@ public struct SeasonPicker: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        // chip 自己**不参与** Tab 焦点：整条季选择器是一个焦点单元（roving focus），
+        // 焦点落在选择器上时用 ← → 换季。否则 Tab 会停在每个 chip 上，
+        // 方向键被按钮吞掉，键盘用户根本切不了季。
+        .focusable(false)
         .help(season.name)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }

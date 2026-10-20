@@ -182,7 +182,11 @@ private struct ContentColumnView: View {
         case .home:
             if let session {
                 HomeView(
-                    model: HomeViewModel(dataSource: session.homeDataSource),
+                    model: HomeViewModel(
+                        dataSource: session.isDemo
+                            ? DemoDataSources.Home()
+                            : session.homeDataSource
+                    ),
                     imageResolver: HomeImageResolver(
                         baseURL: session.server.baseURL,
                         accessToken: session.accessToken
@@ -196,7 +200,9 @@ private struct ContentColumnView: View {
             if let session {
                 LibraryView(
                     viewModel: LibraryViewModel(
-                        dataSource: session.libraryDataSource,
+                        dataSource: session.isDemo
+                            ? DemoDataSources.Library()
+                            : session.libraryDataSource,
                         libraryId: id,
                         // `MediaKind` 是 Emby 的媒体大类（Video/Audio/Photo/Book），
                         // 不是「电影/剧集」。电影与剧集都属于 Video，具体类型用
@@ -218,7 +224,11 @@ private struct ContentColumnView: View {
         case .search:
             if let session {
                 SearchView(
-                    viewModel: SearchViewModel(dataSource: session.searchDataSource),
+                    viewModel: SearchViewModel(
+                        dataSource: session.isDemo
+                            ? DemoDataSources.Search()
+                            : session.searchDataSource
+                    ),
                     navigation: model,
                     onOpen: { result in
                         model.navigate(to: .detail(itemId: result.id))
@@ -259,7 +269,9 @@ private struct DetailColumnView: View {
             if let session {
                 // 电影与剧集共用同一个 ViewModel，由它按 `MediaItem.type` 决定布局。
                 let viewModel = DetailViewModel(
-                    dataSource: session.detailDataSource,
+                    dataSource: session.isDemo
+                        ? DemoDataSources.Detail()
+                        : session.detailDataSource,
                     itemId: itemID
                 )
                 DetailRouterView(

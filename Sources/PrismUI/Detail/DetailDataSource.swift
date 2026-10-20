@@ -107,8 +107,14 @@ public struct EmbyDetailDataSource: DetailDataSource {
     /// - Parameters:
     ///   - client: 已登录的客户端（令牌由 `EmbyClient` 自己持有）。
     ///   - userId: 当前用户 id（`/Users/{id}/…` 端点必填）。
-    ///   - accessToken: 访问令牌，**只用于拼图片 URL 的 `?api_key=`**。
+    ///   - accessToken: 访问令牌，**只用于拼图片 URL 的 `?api_key=`**，默认 `nil`。
     ///     条目 / 季集 / 相似等 JSON 请求由 `EmbyClient` 自己注入鉴权头，不需要它。
+    ///
+    ///     **什么时候要传**：只有当注入的图片加载器是 `PassthroughImageLoader`
+    ///     （裸 `URLSession`，不发任何请求头）时才需要。
+    ///     App 内的默认加载器 `EmbyImageLoader` 会把**同源** URL 识别成
+    ///     `ImageURLEndpoint` 并交给 `EmbyClient` 发请求，鉴权头由客户端注入，
+    ///     因此传 `nil` 即可——这样令牌不会出现在 URL、缓存键与日志里。
     ///   - similarLimit: 相似推荐条数，默认 12。
     public init(
         client: EmbyClient,
@@ -122,26 +128,32 @@ public struct EmbyDetailDataSource: DetailDataSource {
         self.similarLimit = similarLimit
     }
 
+    /// 取条目详情（转发到 `EmbyClient.itemDetail`）。
     public func itemDetail(itemId: String) async throws -> MediaItem {
         try await client.itemDetail(userId: userId, itemId: itemId)
     }
 
+    /// 取季列表（转发到 `EmbyClient.seasons`）。
     public func seasons(seriesId: String) async throws -> [MediaItem] {
         try await client.seasons(seriesId: seriesId, userId: userId)
     }
 
+    /// 取集列表（`seasonId` 为 `nil` 时取全部季）。
     public func episodes(seriesId: String, seasonId: String?) async throws -> [MediaItem] {
         try await client.episodes(seriesId: seriesId, userId: userId, seasonId: seasonId)
     }
 
+    /// 取相似推荐（条数由 `similarLimit` 决定）。
     public func similar(itemId: String) async throws -> [MediaItem] {
         try await client.similar(userId: userId, itemId: itemId, limit: similarLimit)
     }
 
+    /// 标记已看 / 未看（转发到 `EmbyClient.markPlayed`）。
     public func setPlayed(itemId: String, played: Bool) async throws -> UserItemData {
         try await client.markPlayed(userId: userId, itemId: itemId, played: played)
     }
 
+    /// 收藏 / 取消收藏（转发到 `EmbyClient.markFavorite`）。
     public func setFavorite(itemId: String, isFavorite: Bool) async throws -> UserItemData {
         try await client.markFavorite(userId: userId, itemId: itemId, favorite: isFavorite)
     }
@@ -152,10 +164,10 @@ public struct EmbyDetailDataSource: DetailDataSource {
     /// 与 ``EmbyAPI/RequestBuilder/joinedURL(baseURL:path:query:)``（负责基址拼接、
     /// 反代前缀与百分号编码），不自己拼字符串。
     ///
-    /// - Important: `api_key` 会出现在 URL 里，可能被日志记录。
-    ///   `AsyncPosterImage` 的过渡加载器 `PassthroughImageLoader` 用裸 `URLSession`，
-    ///   **不带请求头**，所以只能这样传令牌。等图片加载器换成支持自定义头的实现
-    ///   （Nuke），把 `accessToken` 传 `nil` 即可。
+    /// - Important: 只有在 `accessToken` 非空时才会附加 `api_key`。
+    ///   附加后令牌会出现在 URL、`URLCache` 键与服务端访问日志里，
+    ///   因此**默认不附加**：App 内用 `EmbyImageLoader` 时它走的是带鉴权头的
+    ///   `ImageURLEndpoint` 路径，根本不需要 `api_key`。
     public func imageURL(itemId: String, kind: ImageKind, tag: String?, maxWidth: Int) -> URL? {
         guard !itemId.isEmpty else { return nil }
         guard let tag, !tag.isEmpty else { return nil }

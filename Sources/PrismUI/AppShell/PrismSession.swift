@@ -26,6 +26,9 @@ public final class PrismSession {
     /// 图片加载器（两级缓存 + 解码期降采样 + 并发去重 + 请求合并）。
     public let imageLoader: EmbyImageLoader
 
+    /// 是否为演示会话（`DemoEmbyClient` 驱动，不走网络）。
+    public let isDemo: Bool
+
     /// 当前用户 id 的便捷访问。
     public var userId: String { session.userId }
     /// 当前用户。
@@ -38,9 +41,10 @@ public final class PrismSession {
     /// - Parameters:
     ///   - server: 服务器连接信息。
     ///   - session: 已登录的会话。
-    public init(server: ServerConnection, session: AuthSession) {
+    public init(server: ServerConnection, session: AuthSession, isDemo: Bool = false) {
         self.server = server
         self.session = session
+        self.isDemo = isDemo || server.isDemo
         self.client = EmbyClient(server: server, identity: ClientIdentity.current())
         self.imageLoader = EmbyImageLoader(client: self.client)
     }
