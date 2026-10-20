@@ -85,6 +85,16 @@ let package = Package(
             name: "EmbyAPITests",
             dependencies: ["EmbyAPI", "PrismCore"],
             swiftSettings: sharedSwiftSettings
+        ),
+        .testTarget(
+            name: "PrismDataTests",
+            dependencies: ["PrismData", "EmbyAPI", "PrismCore"],
+            swiftSettings: sharedSwiftSettings
+        ),
+        .testTarget(
+            name: "PrismPlaybackTests",
+            dependencies: ["PrismPlayback", "PrismCore"],
+            swiftSettings: sharedSwiftSettings
         )
     ],
     swiftLanguageModes: [.v6]

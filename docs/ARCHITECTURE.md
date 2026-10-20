@@ -189,11 +189,17 @@ public protocol EmbyEndpoint: Sendable {
     var path: String { get }                       // "/Users/{userId}/Items"
     var method: HTTPMethod { get }                 // .get default
     var query: [String: String] { get }
-    var body: Encodable? { get }
+    var body: Data? { get }                        // 已编码的 JSON 字节
+    var contentType: String? { get }
     var requiresAuth: Bool { get }
     var timeout: TimeInterval? { get }
+    var cachePolicy: URLRequest.CachePolicy { get }
 }
 ```
+
+> **已实现且冻结**：`Sources/EmbyAPI/Transport/EmbyEndpoint.swift`（主管维护，代理只读）。
+> 其中 `body` 用 `Data?` 而非 `Encodable?` —— Swift 6 下 `any Encodable` 不是 `Sendable`，
+> 无法安全穿过 `EmbyClient` 的 actor 边界。端点用 `EmbyJSON.encode(_:)` 自行编码。
 
 ### 2.2 端点集（P0）
 

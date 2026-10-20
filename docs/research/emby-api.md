@@ -611,6 +611,9 @@ SortBy=ProductionYear,PremiereDate,SortName&SortOrder=Descending,Descending,Asce
 | `ImageTags` | object | **图片类型 → tag** 的映射，如 `{"Primary":"abc123","Logo":"def456"}` |
 | `BackdropImageTags` | string[] | 背景图 tag 数组（**有几张就有几项**） |
 | `ParentBackdropImageTags` | string[] | 可继承的父级背景图 tag |
+| `ParentBackdropItemId` | string | 提供背景图的父级条目 Id |
+| `SeriesPrimaryImageTag` | string | 所属剧集的海报 tag（Episode 上取剧海报用） |
+| `PrimaryImageItemId` | string | 主图实际所属的条目 Id（可能是父级） |
 | `ParentThumbItemId` / `ParentThumbImageTag` | string | 可继承的缩略图来源 |
 | `ParentLogoItemId` / `ParentLogoImageTag` | string | 可继承的 Logo 来源 |
 | `PrimaryImageAspectRatio` | double | 主图宽高比（**Primary 唯一不固定比例，必须用它排版**） |
@@ -652,14 +655,21 @@ SortBy=ProductionYear,PremiereDate,SortName&SortOrder=Descending,Descending,Asce
 | `PlaybackPositionTicks` | int64 | **续播位置**（"继续观看"就靠它） |
 | `PlayCount` | int | 播放次数 |
 | `IsFavorite` | bool | 是否收藏 |
-| `Likes` | bool? | 喜欢/不喜欢（`null`=未评分） |
 | `LastPlayedDate` | datetime | 最后播放时间 |
 | `PlayedPercentage` | double | 已看百分比（文件夹用） |
 | `UnplayedItemCount` | int | 未看子项数（文件夹用） |
 | `Rating` | double | 个人评分 |
 | `ItemId` | string | 对应条目 Id |
+| `Key` | string | 内部键（一般忽略） |
+| `ServerId` | string | 服务器 Id（官方注明"仅 Windows 应用使用"） |
+| `Likes` | bool? | 喜欢/不喜欢 —— ⚠️ **见下** |
 
-- ✅ 来源：<https://swagger.emby.media/openapi.json> → `UserItemDataDto`
+- ✅ 来源（**当前 Reference 的 11 个字段**）：<https://dev.emby.media/reference/RestAPI/UserLibraryService/postUsersByUseridItemsByIdRating.html>（`UserItemDataDto` 定义段）
+- ⚠️ **`Likes` 字段存疑**：旧 OpenAPI 快照（4.1.1.0）的 `UserItemDataDto` **有** `Likes` 但**没有** `ServerId`；当前 Reference 页**有** `ServerId` 但**没有** `Likes`。
+  - 说明 `Likes` 可能已在 4.x 某版本从 DTO 中移除，或改由别的机制表达。
+  - **但 `Likes` 作为 `/Users/{UserId}/Items/{Id}/Rating` 的 query 参数仍然存在且必填**（✅ 同页 `*Likes | query`，必填标记 `*`）。
+  - **实现建议**：`Likes` 解码为 `Bool?` 且**允许缺失**；不要用 `UserData.Likes` 驱动 UI 的"喜欢"按钮状态，改用本地状态 + 从 `Rating` 端点返回的 DTO 推断，或直接重新拉取条目详情。
+  - ⚠️【待验证】：在真实 4.8/4.9 服务器上对某条目 POST 一次 `Rating?Likes=true`，看返回的 DTO 里有没有 `Likes`。
 
 **`People`（`BaseItemPerson`）字段** ✅：`Name`、`Id`、`Role`（角色名）、`Type`（`Actor`/`Director`/`Writer`/`Producer`/`GuestStar`…）、`PrimaryImageTag`
 
@@ -827,6 +837,11 @@ GET /emby/Persons/{name}/Images/{Type}?maxWidth=200&tag={PrimaryImageTag}
 | `Protocol` | string | `File`/`Http`/`Rtsp`… |
 | `IsRemote` | bool | 是否远程源 |
 | `LiveStreamId` | string | 直播流 Id |
+| `Chapters` | ChapterInfo[] | 章节（本媒体源的） |
+| `MimeType` | string | 源 MIME |
+| `TranscodingMimeType` | string | 转码输出 MIME |
+| `ItemId` | string | 所属条目 Id（官方注明「仅 Windows 应用使用」） |
+| `ContainerStartTimeTicks` | int64 | 容器起始时间 |
 
 ---
 
@@ -1608,8 +1623,15 @@ func cacheKey(_ r: ImageRequest) -> String {
 | 缩略图（Thumb） | 自身 `ImageTags["Thumb"]` → `ParentThumbItemId` + `ParentThumbImageTag` → 用 Primary |
 | 人物 | `People[].PrimaryImageTag` 为空 → 首字母圆形占位 |
 
-**继承字段** ✅（<https://dev.emby.media/doc/restapi/Images.html>）：
-`ParentLogoItemId`、`ParentLogoImageTag`、`ParentArtItemId`、`ParentArtImageTag`、`ParentBackdropItemId`、`ParentBackdropImageTags`、`ParentThumbItemId`、`ParentThumbImageTag`
+**继承字段** —— **当前版本（Reference 实测）`BaseItemDto` 上的字段** ✅：
+
+`ParentLogoItemId`、`ParentLogoImageTag`、`ParentBackdropItemId`、`ParentBackdropImageTags`、`ParentThumbItemId`、`ParentThumbImageTag`、`PrimaryImageItemId`、`SeriesPrimaryImageTag`
+
+> ⚠️ **`ParentArtItemId` / `ParentArtImageTag` 已不在当前 `BaseItemDto` 中**。
+> - Images 文档页仍列着它们（<https://dev.emby.media/doc/restapi/Images.html>），属**旧版残留**。
+> - 当前 Reference 的 `BaseItemDto` 里搜不到这两个字段（已逐字段核对 <https://dev.emby.media/reference/RestAPI/ItemsService/getUsersByUseridItems.html>）。
+> - 旧 OpenAPI 快照（4.1.1.0）里**有** `ParentArtItemId`/`ParentArtImageTag` —— 说明这两个字段在 4.1 之后被移除或改名。
+> - **实现建议**：解码时保留这两个 key 但允许缺失；不要依赖它们做 Art 图回退，改用 `Backdrop`。
 
 > 这些字段**默认可能不返回**，需要 `Fields` 或 `EnableImages=true`。若拿不到，说明要在请求里加 `EnableImages=true`（默认值未在文档明确，⚠️【待验证】）。
 
