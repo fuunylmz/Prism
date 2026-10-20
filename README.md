@@ -1,153 +1,79 @@
 # Prism
 
-原生 macOS 的 Emby 客户端：SwiftUI 界面 + AetherEngine 播放内核 + 本地缓存与离线能力。
+macOS 上的 Emby 客户端。SwiftUI 原生界面，AetherEngine 播放内核。
 
-> 本仓库当前处于 **M0 地基阶段**：骨架已可构建、可运行、可测试，业务功能由各模块 owner 并行填充。
-> 规划与任务板见 [docs/ROADMAP.md](docs/ROADMAP.md)，模块契约见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+## 功能
 
-## 特性规划（v1.0）
+- **连接**：手动填地址或局域网自动发现（UDP 7359），凭据存 Keychain
+- **浏览**：首页（继续观看 / 接下来 / 最新）、媒体库网格、筛选排序、搜索
+- **详情**：电影与剧集两套布局，季集列表，演职员，相似推荐
+- **播放**：MKV/MP4 直连，H.264/HEVC/AV1 硬解，ASS/PGS 字幕，多音轨，HDR / 杜比视界
+- **续播**：进度上报服务器，跨设备一致
+- **双语**：中文 / English
 
-- **连接**：手动填服务器地址、局域网 UDP 7359 自动发现、登录与凭据安全存储
-- **浏览**：首页（继续观看 / 最新 / 接下来）、媒体库网格、筛选排序、搜索
-- **详情**：电影与剧集两种布局、季集列表、演职员、相似推荐
-- **播放**：mkv/mp4 直连，H.264/HEVC/AV1 硬解，ASS/PGS 字幕，多音轨，HDR / 杜比视界
-- **续播**：播放进度上报服务器，跨设备一致
+暂不支持：音乐库、Live TV、远程控制、多用户、离线下载。
 
-v1.0 明确不做：音乐库、Live TV、远程控制、多用户。详见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+## 安装
 
----
+从 [Releases](https://github.com/fuunylmz/Prism/releases) 下载 DMG，拖进 Applications。
 
-## 环境要求
+> 当前未公证（没有 Apple 开发者证书），首次打开需要**右键 → 打开**。
 
-| 项 | 版本 | 说明 |
-|---|---|---|
-| macOS | 15+ | 部署目标 `MACOSX_DEPLOYMENT_TARGET = 15.0` |
-| Xcode | **26 / 27** | 必须装在 `/Applications/Xcode.app` |
-| Swift | 6.x | 语言模式 `.v6`（严格并发） |
-| XcodeGen | 2.46.0 | `bootstrap.sh` 自动准备，无需手动装 |
-| Homebrew | 本机不可用 | 见下方说明 |
+## 从源码构建
 
-### 本机已知限制
-
-- **brew 不可用**：`/opt/homebrew` 对进程只读，`brew install` 会报 `Operation not permitted`。
-  因此 `bootstrap.sh` **不依赖 brew**：找不到 `xcodegen` 时会从 GitHub Releases 下载官方 zip
-  解包到 `.tools/xcodegen/`（已被 `.gitignore` 忽略），后续构建直接复用该副本。
-- **Xcode 偏好不动手**：正常构建**不需要**修改任何 Xcode 用户级设置。
-  嵌套沙箱问题由 `Package.swift` 里的 `.unsafeFlags(["-disable-sandbox"])` 解决，
-  它同时作用于 `swift build` 和 `xcodebuild`。
-
-⚠️ **本机 `xcode-select` 指向 CommandLineTools**，直接用 CLT 的 swiftpm 编译会失败。
-所有脚本都通过 [`scripts/env.sh`](scripts/env.sh) 强制 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`，
-并把模块缓存 / 临时目录 / 包缓存全部重定向到工作区内。**遇到构建问题先读 [docs/BUILD_ENV.md](docs/BUILD_ENV.md)**。
-
----
-
-## 快速开始
+需要 macOS 15+ 与 Xcode 26+。
 
 ```bash
-git clone <repo> && cd Prism
-
-./scripts/bootstrap.sh   # 准备 XcodeGen + 生成 Prism.xcodeproj
-./scripts/build.sh       # 构建 → build/Build/Products/Debug/Prism.app
+./scripts/bootstrap.sh   # 生成 Xcode 工程
+./scripts/build.sh       # 产出 build/Build/Products/Debug/Prism.app
 ./scripts/run.sh         # 构建并启动
-./scripts/test.sh        # swift test（纯逻辑层）
-./scripts/clean.sh       # 清 build/ 与 .build/；--all 连工程一起删
 ```
 
-新会话开工前建议先 `source scripts/env.sh`，一次性拿到正确的工具链与缓存变量。
+打包：
 
-也可以直接用 Xcode 打开 `Prism.xcodeproj`（由 `project.yml` 生成，改完 spec 记得重跑 bootstrap）。
+```bash
+./scripts/release.sh --skip-notarize   # 本地用，产出 release/Prism-<版本>.dmg
+```
 
----
+构建环境有问题先看 [docs/BUILD_ENV.md](docs/BUILD_ENV.md)。
 
-## 目录结构
+### 没有服务器也能看界面
+
+```bash
+open -a "$PWD/build/Build/Products/Debug/Prism.app" --args -DemoMode YES
+```
+
+演示模式内置 26 部电影、8 部剧（148 集）、3 个合集，海报与视频都是代码生成的，不联网。
+
+## 结构
 
 ```
-project.yml              # Xcode 工程的唯一事实来源（生成 Prism.xcodeproj，勿手改 pbxproj）
-Package.swift            # 根 SPM 包：所有 Swift 源码的唯一构建入口
-App/                     # 极薄的 App target：@main + Info.plist + entitlements + Assets
+App/                     App target：@main、Info.plist、entitlements、资源
 Sources/
-  PrismCore/             # 基础模型、日志、设置存储、工具（无依赖）
-  EmbyAPI/               # Emby 网络层与 DTO            → 依赖 PrismCore
-  PrismData/             # 本地缓存 / Keychain / 图片缓存 → 依赖 PrismCore, EmbyAPI
-  PrismPlayback/         # 播放引擎（AetherEngine 封装）  → 依赖 PrismCore
-  PrismUI/               # 设计系统与界面               → 依赖以上全部
-Tests/
-  PrismCoreTests/
-  EmbyAPITests/
-scripts/                 # env / bootstrap / build / test / run / clean
-docs/                    # ROADMAP、ARCHITECTURE、BUILD_ENV、research
-.github/workflows/ci.yml
+  PrismCore/             模型、解码、日志、设置
+  EmbyAPI/               Emby 网络层、DTO、端点、服务器发现
+  PrismData/             Keychain 会话、图片管线
+  PrismPlayback/         播放引擎适配、协商、进度上报
+  PrismUI/               设计系统与全部界面
+Tests/                   按模块划分的单元测试
+scripts/                 bootstrap / build / test / run / release
+docs/                    架构、路线图、调研、构建环境
 ```
 
-**依赖只能自上而下**，禁止反向或环状：
+依赖只能向下：
 
 ```
 PrismUI ──▶ PrismData ──▶ EmbyAPI ──▶ PrismCore
-   └─────▶ PrismPlayback ────────────┘
+   └─────▶ PrismPlayback ──▶ EmbyAPI
 ```
 
----
-
-## 协作者分工约定
-
-| 目录 / 文件 | Owner | 规则 |
-|---|---|---|
-| `Sources/PrismCore/` | Core 代理 | 只放模型、日志、设置、工具。**不得** import SwiftUI / AppKit |
-| `Sources/EmbyAPI/` | API 代理 | 只依赖 PrismCore；网络测试一律走 `URLProtocol` 桩，禁止真实网络 |
-| `Sources/PrismData/` | Data 代理 | 只依赖 PrismCore + EmbyAPI |
-| `Sources/PrismPlayback/` | 播放代理 | 只依赖 PrismCore；**不得** import EmbyAPI（播放地址由上层传入） |
-| `Sources/PrismUI/` | UI 代理 | 唯一可以 import SwiftUI 的模块；ViewModel 不 import SwiftUI |
-| `App/` | 基础设施代理 | 保持极薄：只允许 `@main`、`WindowGroup`、`Commands`、资源 |
-| `Tests/<模块>Tests/` | 对应模块 owner | 每个模块一个测试 target |
-| `scripts/`、`project.yml`、`Package.swift`、`.github/` | 基础设施代理 | 改动请提 issue，不要直接改 |
-| `docs/research/` | 调研代理 | 其他代理只读 |
-| `docs/ROADMAP.md` | 主管 | 其他代理只读 |
-
-### 三条硬规则
-
-1. **不要手改 `Prism.xcodeproj/project.pbxproj`**。它是生成产物，任何手改都会在下次
-   `bootstrap.sh` 时被覆盖，并且必然与其他人的改动冲突。要改工程设置 → 改 `project.yml`。
-2. **不要在别人的目录里写文件**。新增源文件放进自己模块的 `Sources/<模块>/` 下即可，
-   SPM 按目录自动收集，无需登记。
-3. **新增依赖前先问**。当前骨架刻意零第三方依赖；`Package.swift` 的 `dependencies:` 由基础设施代理统一维护。
-
-### 提交前自检
-
-```bash
-./scripts/build.sh && ./scripts/test.sh
-```
-
-### 构建环境的三个坑（已由脚本兜住）
-
-| 现象 | 根因 | 现状 |
-|---|---|---|
-| `sandbox_apply: Operation not permitted` | DSH 文件沙箱内不能再嵌套 `sandbox-exec` | `Package.swift` 统一加 `-disable-sandbox` |
-| `ModuleCache ... Operation not permitted` | `~/Library/Caches`、系统 `TMPDIR` 不可写 | `scripts/env.sh` 全部重定向到 `.build/` |
-| `xcodebuild: cannot open ... org.swift.swiftpm` | SwiftPM 缓存不可写 | `scripts/env.sh` 设置 `CFFIXED_USER_HOME` |
-
-细节与排查过程见 [docs/BUILD_ENV.md](docs/BUILD_ENV.md)。
-
----
+工程文件 `Prism.xcodeproj` 由 `project.yml` 生成，**不要手改 pbxproj**——改 `project.yml` 后重跑 `bootstrap.sh`。
 
 ## 许可
 
-**Prism 以 [GNU GPL v3.0](LICENSE) 发布**（`GPL-3.0-only`）。
+[GNU GPL v3.0](LICENSE)。
 
-这意味着：你可以自由使用、修改、分发本软件，但**衍生作品必须以同样的许可证开源**。
+播放内核 [AetherEngine](https://github.com/superuser404notfound/AetherEngine) 为 LGPL-3.0（含 App Store/DRM 例外），
+其余第三方组件与商标声明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
-### 第三方组件
-
-| 组件 | 许可证 | 用途 |
-|---|---|---|
-| [AetherEngine](https://github.com/superuser404notfound/AetherEngine) | LGPL-3.0 **+ App Store/DRM 例外** | 播放内核（FFmpeg demux + VideoToolbox 解码） |
-| [FFmpegBuild](https://github.com/superuser404notfound/FFmpegBuild) | LGPL-3.0 | FFmpeg 二进制发行 |
-| [LibDovi](https://github.com/superuser404notfound/LibDovi) | LGPL-3.0 | 杜比视界 RPU 处理 |
-| [GRDB.swift](https://github.com/groue/GRDB.swift) | MIT | 本地数据库（计划） |
-| [Nuke](https://github.com/kean/Nuke) | MIT | 图片加载与缓存（计划） |
-
-完整声明与各自许可证全文链接见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-
-> **为什么用 GPL-3.0 而不是 MIT？** Prism 依赖 AetherEngine（LGPL-3.0）。虽然 LGPL 允许宽松许可证
-> 的项目链接它，但选择 GPL-3.0 可以让整个生态保持一致，并确保任何改进都会回馈社区。
-> 本项目是 Emby 的第三方客户端，与 Emby LLC 无关联。
+本项目是 Emby 的第三方客户端，与 Emby LLC 无关联。
