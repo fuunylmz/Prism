@@ -121,6 +121,12 @@ public final class NavigationModel {
     /// 请求聚焦搜索框的计数器；每次自增，视图监听后把焦点交给搜索框。
     public private(set) var searchFocusRequest: Int
 
+    /// 请求把焦点交给搜索结果区的计数器；每次自增。
+    ///
+    /// 用途：搜索框有焦点时按 ↓，`AppShellView` 自增它，
+    /// `SearchView` 监听后让结果区获得焦点，之后 ↑↓/↵ 就能操作结果。
+    public private(set) var resultsFocusRequest: Int
+
     // MARK: 常量
 
     /// 详情栏自动折叠的窗口宽度阈值。
@@ -160,6 +166,7 @@ public final class NavigationModel {
         self.windowWidth = 1280
         self.isDetailColumnCollapsed = false
         self.searchFocusRequest = 0
+        self.resultsFocusRequest = 0
     }
 
     // MARK: 派生状态
@@ -360,6 +367,14 @@ public final class NavigationModel {
     /// 视图监听 ``searchFocusRequest`` 的变化；⌘F 与点击侧边栏「搜索」都会调用它。
     public func focusSearch() {
         searchFocusRequest &+= 1
+    }
+
+    /// 请求把焦点交给搜索结果区。
+    ///
+    /// 由 `AppShellView` 在「搜索框有焦点且按下 ↓」时调用；
+    /// `SearchView` 监听 ``resultsFocusRequest`` 的变化。
+    public func requestResultsFocus() {
+        resultsFocusRequest &+= 1
     }
 
     /// 搜索文本变化时的导航副作用。

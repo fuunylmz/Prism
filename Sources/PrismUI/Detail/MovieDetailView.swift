@@ -161,11 +161,14 @@ struct DetailActionRow: View {
                 }
                 Button("刷新详情", systemImage: "arrow.clockwise", action: onRefresh)
             } label: {
+                // 内边距 + 固定图标框，让无边框菜单按钮的固有高度（约 14pt）
+                // 长到与旁边 30pt 的按钮一致；否则「⋯」会显得又小又飘。
                 Image(systemName: "ellipsis")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Palette.textPrimary)
-                    .frame(width: 26, height: 26)
-                    .contentShape(Circle())
+                    .frame(width: 18, height: 18)
+                    .padding(6)
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)

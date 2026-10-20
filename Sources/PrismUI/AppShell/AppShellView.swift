@@ -69,6 +69,16 @@ public struct AppShellView: View {
         .onChange(of: model.searchText) { _, _ in
             model.searchTextDidChange()
         }
+        // 搜索框有焦点时，↓ 把焦点交给结果区（否则方向键被文本框吃掉，
+        // 用户没法用键盘选结果）。结果区内部的 ↑↓/↵ 由 `SearchView` 自己处理。
+        .onKeyPress(.downArrow) {
+            guard isSearchFocused, model.contentRoute == .search, !model.searchText.isEmpty else {
+                return .ignored
+            }
+            isSearchFocused = false
+            model.requestResultsFocus()
+            return .handled
+        }
         .onExitCommand {
             // Esc = 返回：先关播放器，再弹详情栈；不直接关窗口（§4.6.5 第 2 条）。
             model.goBack()

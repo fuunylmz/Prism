@@ -287,6 +287,14 @@ public struct SearchView: View {
         .focusable()
         .focused($isResultsFocused)
         .focusEffectDisabled()
+        // 搜索框里按 ↓ 时，外壳自增 `resultsFocusRequest`；这里接住并把焦点交给结果区。
+        .onChange(of: resolvedNavigation?.resultsFocusRequest ?? 0) { _, _ in
+            guard !viewModel.flatResults.isEmpty else { return }
+            if selectedResultID == nil {
+                selectedResultID = viewModel.flatResults.first?.id
+            }
+            isResultsFocused = true
+        }
         .onKeyPress(keys: [.upArrow, .downArrow]) { press in
             moveSelection(by: press.key == .upArrow ? -1 : 1)
             return .handled
