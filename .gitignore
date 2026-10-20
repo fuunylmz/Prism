@@ -1,7 +1,32 @@
-.DS_Store
+# ---- 构建产物 ----
+# xcodebuild -derivedDataPath
 build/
+# Xcode 默认派生数据
 DerivedData/
-*.xcuserstate
+# swift build / swift test 的 scratch path（含 .build/cache）
+.build/
+
+# ---- 生成物 ----
+# Prism.xcodeproj 由 XcodeGen 从 project.yml 生成。它会被提交，方便直接双击打开；
+# 但永远不要手改 pbxproj：改 project.yml 后跑 ./scripts/bootstrap.sh 重新生成。
+.xcworkspace/
+Package.resolved.bak
+
+# ---- Xcode 用户态 ----
 xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserdatad/
+*.xcuserstate
+
+# ---- 工具与临时目录 ----
+# 工作区内的 XcodeGen 兜底副本（bootstrap.sh 自动下载）
+.tools/
+# 依赖验证用的临时目录
+.spike/
 .swiftpm/
 .idea/
+*.swp
+
+# ---- macOS ----
+.DS_Store

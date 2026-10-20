@@ -1,0 +1,85 @@
+# Prism — XcodeGen 工程定义
+#
+# 这是 Xcode 工程的**唯一事实来源**。`Prism.xcodeproj` 是生成产物，不进版本库。
+# 任何工程级改动（新增 target、改 build settings、加依赖）都必须改这个文件，
+# 然后跑 `./scripts/bootstrap.sh`（= `xcodegen generate`）。
+#
+# 源码归属见 README.md：App/ 只放 @main 与资源，其余代码都在 Package.swift 的 target 里。
+
+name: Prism
+
+options:
+  bundleIdPrefix: app.prism
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  generateEmptyDirectories: false
+  xcodeVersion: "27.0"
+
+packages:
+  Prism:
+    path: .
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    DEAD_CODE_STRIPPING: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    CLANG_ENABLE_MODULES: YES
+
+targets:
+  Prism:
+    type: application
+    platform: macOS
+
+    sources:
+      - path: App
+        excludes:
+          - "Info.plist"
+          - "Prism.entitlements"
+
+    dependencies:
+      - package: Prism
+        product: PrismUI
+
+    settings:
+      base:
+        PRODUCT_NAME: Prism
+        PRODUCT_BUNDLE_IDENTIFIER: app.prism.Prism
+        INFOPLIST_FILE: App/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Automatic
+        # 本地开发用 ad-hoc 签名，无需开发者账号；分发时由 CI/Release 覆盖。
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_ENTITLEMENTS: App/Prism.entitlements
+        ENABLE_HARDENED_RUNTIME: NO
+        COMBINE_HIDPI_IMAGES: YES
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+          ENABLE_TESTABILITY: YES
+          ONLY_ACTIVE_ARCH: YES
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+          SWIFT_COMPILATION_MODE: wholemodule
+
+schemes:
+  Prism:
+    build:
+      targets:
+        Prism: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

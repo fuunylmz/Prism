@@ -1,0 +1,69 @@
+# Prism CI
+#
+# 环境要求：**Xcode 26 或 27**。
+#   - 本地已验证：macOS 27.0 + Xcode 27.1 (27A9275) + Swift 6.4，`./scripts/build.sh` 与
+#     `./scripts/test.sh` 全绿。
+#   - CI 使用 GitHub 托管的 macOS runner（macos-latest 当前指向 macOS 26 镜像，自带 Xcode 26.x）。
+#     若某天 runner 的默认 Xcode 低于 26，`setup-xcode` 步骤会显式切换到 26.x。
+#
+# 注意：本仓库的 xcodebuild 需要解析**本地** SPM 包（path: .），
+# 因此不需要任何网络凭据；凭据助手已在 scripts/env.sh 里禁用，避免任何钥匙串交互。
+#
+# 参考：
+#   https://github.com/maxim-lobanov/setup-xcode
+#   https://github.com/actions/runner-images
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Select Xcode 26.x
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          # 'latest-stable' 指向 runner 上最新的正式版 Xcode；本项目要求 >= 26。
+          xcode-version: 'latest-stable'
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Bootstrap (XcodeGen + generate project)
+        run: ./scripts/bootstrap.sh
+
+      - name: Build (xcodebuild, Debug)
+        run: ./scripts/build.sh
+
+      - name: Verify app bundle
+        run: test -d build/Build/Products/Debug/Prism.app
+
+      - name: Test (swift test)
+        run: ./scripts/test.sh
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build/Logs/**
+          if-no-files-found: ignore
+          retention-days: 7
