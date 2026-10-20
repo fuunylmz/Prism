@@ -38,7 +38,7 @@ struct ClientIdentityTests {
             ClientIdentity.appVersion(infoDictionary: ["CFBundleShortVersionString": "   "])
                 == ClientIdentity.fallbackAppVersion
         )
-        #expect(ClientIdentity.appVersion(infoDictionary: nil) == "0.0.0")
+        #expect(ClientIdentity.appVersion(infoDictionary: nil) == Prism.version)
     }
 
     @Test("deviceId 持久化：两次取值相同，reset 后才变化")

@@ -64,7 +64,24 @@ public struct RequestBuilder: Sendable {
     /// - Returns: 可直接交给 `URLSession` 的请求。
     /// - Throws: ``PrismCore/EmbyError/invalidURL``。
     public func build(_ endpoint: EmbyEndpoint, token: String?, userId: String?) throws -> URLRequest {
-        let url = try url(for: endpoint)
+        // Emby 4.8.x 及部分反向代理对旧式 `X-Emby-Authorization` 的 Version
+        // 解析并不一致：服务器可能因此在创建会话时得到空的 appVersion，返回
+        // `Value cannot be null (Parameter 'appVersion')`。
+        //
+        // 现代 Emby 客户端同时发送这组无敏感信息的 X-Emby-Client* 参数。
+        // 这里保留旧式 Authorization 头，并在 URL query 中补发现代字段，
+        // 不放 token/password，兼容 4.8.x、4.9.x 与反代。
+        var requestQuery = endpoint.query
+        let clientQuery: [String: String] = [
+            "X-Emby-Client": identity.appName,
+            "X-Emby-Client-Version": identity.appVersion,
+            "X-Emby-Device-Id": identity.deviceId,
+            "X-Emby-Device-Name": identity.deviceName
+        ]
+        for (key, value) in clientQuery where requestQuery[key] == nil {
+            requestQuery[key] = value
+        }
+        let url = try Self.joinedURL(baseURL: baseURL, path: endpoint.path, query: requestQuery)
         var request = URLRequest(
             url: url,
             cachePolicy: endpoint.cachePolicy,
@@ -72,6 +89,12 @@ public struct RequestBuilder: Sendable {
         )
         request.httpMethod = endpoint.method.rawValue
         request.setValue(Self.accept, forHTTPHeaderField: "Accept")
+        // 同时以 headers 发送现代 Emby 客户端身份字段。部分 4.8.x 部署/反代
+        // 只从 headers 读取 appVersion，不读取 X-Emby-Authorization 内嵌字段。
+        request.setValue(identity.appName, forHTTPHeaderField: "X-Emby-Client")
+        request.setValue(identity.appVersion, forHTTPHeaderField: "X-Emby-Client-Version")
+        request.setValue(identity.deviceId, forHTTPHeaderField: "X-Emby-Device-Id")
+        request.setValue(identity.deviceName, forHTTPHeaderField: "X-Emby-Device-Name")
 
         // 鉴权头**总是**发送：登录端点也要求它存在（只是没有 Token/UserId）。
         let header = AuthHeader(identity: identity)

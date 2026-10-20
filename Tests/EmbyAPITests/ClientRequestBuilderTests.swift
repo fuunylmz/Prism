@@ -10,6 +10,11 @@ struct ClientRequestBuilderTests {
         RequestBuilder(baseURL: TestFixtures.url(base), identity: TestFixtures.identity())
     }
 
+    /// RequestBuilder 现在兼容 Emby 4.8.x 的现代 X-Emby-Client* 身份参数。
+    private var identityQuerySuffix: String {
+        "X-Emby-Client=Prism&X-Emby-Client-Version=1.0.0&X-Emby-Device-Id=TEST-DEVICE-ID&X-Emby-Device-Name=TestMac"
+    }
+
     @Test(
         "基址 5 种形态都能正确拼接（含反代前缀与尾斜杠）",
         arguments: zip(
@@ -36,7 +41,7 @@ struct ClientRequestBuilderTests {
             userId: nil
         )
         let absolute = try #require(request.url?.absoluteString)
-        #expect(absolute == expected)
+        #expect(absolute == "\(expected)?\(identityQuerySuffix)")
         // 不能出现 `//` 造成的空路径段。
         #expect(!absolute.contains("//Users"))
         #expect(request.url?.path == URL(string: expected)?.path)
@@ -51,7 +56,7 @@ struct ClientRequestBuilderTests {
         )
         #expect(
             request.url?.absoluteString
-                == "https://domain/emby/Users/abc/Items?Limit=20"
+                == "https://domain/emby/Users/abc/Items?Limit=20&\(identityQuerySuffix)"
         )
     }
 
@@ -83,6 +88,24 @@ struct ClientRequestBuilderTests {
         let url = try builder("http://host:8096").url(for: TestEndpoint(path: "/System/Info/Public"))
         #expect(url.absoluteString == "http://host:8096/System/Info/Public")
         #expect(!url.absoluteString.contains("?"))
+    }
+
+    @Test("Emby 4.8 兼容身份：现代 X-Emby-Client* 查询参数与 headers 都存在")
+    func modernIdentityCompatibility() throws {
+        let request = try builder("https://domain/emby").build(
+            TestEndpoint(path: "/Users/Me"),
+            token: nil,
+            userId: nil
+        )
+        let url = try #require(request.url?.absoluteString)
+        #expect(url.contains("X-Emby-Client=Prism"))
+        #expect(url.contains("X-Emby-Client-Version=1.0.0"))
+        #expect(url.contains("X-Emby-Device-Id=TEST-DEVICE-ID"))
+        #expect(url.contains("X-Emby-Device-Name=TestMac"))
+        #expect(request.value(forHTTPHeaderField: "X-Emby-Client") == "Prism")
+        #expect(request.value(forHTTPHeaderField: "X-Emby-Client-Version") == "1.0.0")
+        #expect(request.value(forHTTPHeaderField: "X-Emby-Device-Id") == "TEST-DEVICE-ID")
+        #expect(request.value(forHTTPHeaderField: "X-Emby-Device-Name") == "TestMac")
     }
 
     @Test("GET 无 body：不设 Content-Type，Accept 固定 JSON")

@@ -21,7 +21,11 @@ public struct ClientIdentity: Sendable, Hashable {
     public static let defaultAppName = "Prism"
 
     /// 版本号取不到时的回退值。
-    public static let fallbackAppVersion = "0.0.0"
+    ///
+    /// 不能用空串或 `0.0.0`：Emby 4.8.x 会把它解析为缺失的 `appVersion`，
+    /// 直接返回 400 `Value cannot be null (Parameter 'appVersion')`。
+    /// 使用 PrismCore 的编译期版本，保证 SwiftPM 测试、Debug、Release 都有非空版本。
+    public static let fallbackAppVersion = Prism.version
 
     /// 客户端名（`Client=`），Prism 固定为 `"Prism"`。
     public let appName: String
