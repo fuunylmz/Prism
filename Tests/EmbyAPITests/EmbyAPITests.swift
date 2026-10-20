@@ -4,10 +4,9 @@ import PrismCore
 
 @Suite("EmbyAPI 骨架自检")
 struct EmbyAPITests {
-    @Test("API 前缀与占位标记")
-    func placeholder() {
-        #expect(EmbyAPI.isPlaceholder)
-        #expect(EmbyAPI.apiPathPrefix == "/emby")
+    @Test("API 前缀常量")
+    func apiPathPrefix() {
+        #expect(EmbyAPIConstants.apiPathPrefix == "/emby")
     }
 
     @Test("可访问 PrismCore")

@@ -205,12 +205,15 @@ extension Route {
 
     /// 该路由是否需要详情栏。
     ///
-    /// 首页 / 搜索 / 设置是「内容栏占满」的页面，不需要第三栏；
-    /// 媒体库需要详情栏（即使尚未选中条目，也显示空态提示）。
+    /// **首页也需要详情栏**：UX 规格 §S04 明确要求「首页卡片点击 → 右侧详情栏加载，不跳页」，
+    /// 而不是把用户推到媒体库页。搜索页同理（结果点开应在侧栏预览，便于连续浏览）。
+    ///
+    /// 详情栏本身是「按需出现」的：`NavigationModel.showsDetailColumn` 还要求
+    /// 用户没有手动折叠、且窗口宽度足够（≥1040pt）。所以首页在窄窗口下仍然只显示两栏。
     public var showsDetailColumn: Bool {
         switch self {
-        case .library, .detail: true
-        case .home, .search, .downloads, .settings, .player: false
+        case .library, .detail, .home, .search: true
+        case .downloads, .settings, .player: false
         }
     }
 

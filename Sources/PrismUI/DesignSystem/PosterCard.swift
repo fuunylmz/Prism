@@ -171,7 +171,9 @@ public struct PosterCard: View {
     private var hoverOverlay: some View {
         ZStack {
             if isHovering {
-                Palette.scrim.opacity(0.45)
+                // 只压暗 25%：海报是主角，遮罩不能盖过画面本身。
+                // `Palette.scrim`（55%）留给播放器浮层这类需要强遮罩的场景。
+                Color.black.opacity(0.25)
                     .allowsHitTesting(false)
                 playAffordance
             }

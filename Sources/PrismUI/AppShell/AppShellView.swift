@@ -23,6 +23,9 @@ public struct AppShellView: View {
     /// 导航模型（由 ``RootShell`` 注入并共享给菜单命令）。
     @Bindable private var model: NavigationModel
 
+    /// 当前会话；`nil` 表示未登录（页面降级为占位）。
+    private let session: PrismSession?
+
     /// 工具栏搜索框焦点。
     @FocusState private var isSearchFocused: Bool
 
@@ -30,16 +33,19 @@ public struct AppShellView: View {
 
     /// 创建应用外壳。
     ///
-    /// - Parameter model: 导航模型。
-    public init(model: NavigationModel) {
+    /// - Parameters:
+    ///   - model: 导航模型。
+    ///   - session: 已登录会话；`nil` 时各页面显示「未连接」占位。
+    public init(model: NavigationModel, session: PrismSession? = nil) {
         self.model = model
+        self.session = session
     }
 
     public var body: some View {
         NavigationSplitView(columnVisibility: $model.columnVisibility) {
             SidebarView(model: model)
         } content: {
-            ContentColumnView(model: model)
+            ContentColumnView(model: model, session: session)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Palette.surface)
                 .navigationSplitViewColumnWidth(min: 420, ideal: 720)
@@ -84,7 +90,7 @@ public struct AppShellView: View {
     @ViewBuilder
     private var detailColumn: some View {
         if model.showsDetailColumn {
-            DetailColumnView(model: model)
+            DetailColumnView(model: model, session: session)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Palette.surface)
                 .navigationSplitViewColumnWidth(min: 380, ideal: 640)
@@ -152,6 +158,9 @@ private struct ContentColumnView: View {
     /// 导航模型。
     @Bindable var model: NavigationModel
 
+    /// 当前会话；`nil` 时各页面降级为占位。
+    let session: PrismSession?
+
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -161,11 +170,56 @@ private struct ContentColumnView: View {
     private var content: some View {
         switch model.contentRoute {
         case .home:
-            HomePlaceholderView()
+            if let session {
+                HomeView(
+                    model: HomeViewModel(dataSource: session.homeDataSource),
+                    imageResolver: HomeImageResolver(
+                        baseURL: session.server.baseURL,
+                        accessToken: session.accessToken
+                    ),
+                    onNavigate: { route in model.navigate(to: route) }
+                )
+            } else {
+                HomePlaceholderView()
+            }
         case let .library(id, type):
-            LibraryPlaceholderView(libraryID: id, type: type)
+            if let session {
+                LibraryView(
+                    viewModel: LibraryViewModel(
+                        dataSource: session.libraryDataSource,
+                        libraryId: id,
+                        // `MediaKind` 是 Emby 的媒体大类（Video/Audio/Photo/Book），
+                        // 不是「电影/剧集」。电影与剧集都属于 Video，具体类型用
+                        // `includeItemTypes` 区分。
+                        kind: .video,
+                        includeItemTypes: type == .series ? [.series] : [.movie]
+                    ),
+                    libraryName: model.contentRoute.title,
+                    countUnit: type == .series ? "部" : "部",
+                    selectedItemID: model.selectedDetailItemID,
+                    onOpenDetail: { item in model.navigate(to: .detail(itemId: item.id)) },
+                    onPlay: { item in
+                        model.navigate(to: .player(itemId: item.id, mediaSourceId: nil, resumeAt: .zero))
+                    }
+                )
+            } else {
+                LibraryPlaceholderView(libraryID: id, type: type)
+            }
         case .search:
-            SearchPlaceholderView()
+            if let session {
+                SearchView(
+                    viewModel: SearchViewModel(dataSource: session.searchDataSource),
+                    navigation: model,
+                    onOpen: { result in
+                        model.navigate(to: .detail(itemId: result.id))
+                    },
+                    onPlay: { result in
+                        model.navigate(to: .player(itemId: result.id, mediaSourceId: nil, resumeAt: .zero))
+                    }
+                )
+            } else {
+                SearchPlaceholderView()
+            }
         case .downloads:
             DownloadsPlaceholderView()
         case let .settings(tab):
@@ -187,9 +241,35 @@ private struct DetailColumnView: View {
     /// 导航模型。
     @Bindable var model: NavigationModel
 
+    /// 当前会话；`nil` 时降级为占位。
+    let session: PrismSession?
+
     var body: some View {
         if let itemID = model.selectedDetailItemID {
-            DetailPlaceholderView(itemId: itemID)
+            if let session {
+                // 电影与剧集共用同一个 ViewModel，由它按 `MediaItem.type` 决定布局。
+                let viewModel = DetailViewModel(
+                    dataSource: session.detailDataSource,
+                    itemId: itemID
+                )
+                DetailRouterView(
+                    viewModel: viewModel,
+                    actions: DetailActions(
+                        play: { request in
+                            model.navigate(to: .player(
+                                itemId: request.itemId,
+                                mediaSourceId: request.mediaSourceId,
+                                resumeAt: request.resumeAt
+                            ))
+                        },
+                        openItem: { id in
+                            model.navigate(to: .detail(itemId: id))
+                        }
+                    )
+                )
+            } else {
+                DetailPlaceholderView(itemId: itemID)
+            }
         } else {
             DetailEmptyView()
         }

@@ -53,6 +53,14 @@ public struct PassthroughImageLoader: PosterImageLoading {
         self.session = session
     }
 
+    /// 下载并解码一张图。
+    ///
+    /// - Parameters:
+    ///   - url: 图片地址。
+    ///   - targetSize: 期望尺寸（本实现忽略，留给 Nuke 做降采样）。
+    /// - Returns: 解码好的图片。
+    /// - Throws: 网络错误、``PosterImageError/httpStatus(_:)`` 或
+    ///   ``PosterImageError/decodingFailed``。
     public func image(for url: URL, targetSize: CGSize) async throws -> NSImage {
         let (data, response) = try await session.data(from: url)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -73,6 +81,12 @@ public struct PlaceholderImageLoader: PosterImageLoading {
     /// 创建占位加载器。
     public init() {}
 
+    /// 恒定失败：总是抛 ``PosterImageError/unavailable``，让调用方展示占位图。
+    ///
+    /// - Parameters:
+    ///   - url: 图片地址（忽略）。
+    ///   - targetSize: 期望尺寸（忽略）。
+    /// - Throws: 总是 ``PosterImageError/unavailable``。
     public func image(for url: URL, targetSize: CGSize) async throws -> NSImage {
         throw PosterImageError.unavailable
     }
@@ -291,3 +305,18 @@ private struct AsyncPosterImagePreviewBoard: View {
         .prismTheme(PrismTheme(appearance: .light))
         .environment(\.posterImageLoader, PreviewImageLoader())
 }
+
+// MARK: - 与数据层的桥接
+
+// `PosterImageLoading` 定义在 PrismUI（依赖方向 PrismUI → PrismData），
+// 而 `EmbyImageLoader` 在 PrismData。协议遵循必须由**下游模块**补：
+// 这是 Swift 允许的「给外部类型补协议遵循」，不需要把协议下沉、
+// 也不需要造 adapter struct。
+//
+// 前置条件：`EmbyImageLoader.image(for:targetSize:)` 的方法签名必须与本协议逐字一致
+// （已由 `PrismData/Images/EmbyImageLoader.swift` 保证）。
+#if canImport(PrismData)
+import PrismData
+
+extension EmbyImageLoader: PosterImageLoading {}
+#endif
