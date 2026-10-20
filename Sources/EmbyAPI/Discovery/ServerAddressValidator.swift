@@ -18,6 +18,14 @@ import PrismCore
 /// | `http://host/emby` | `http://host/emby` | 保留反代路径前缀 |
 /// | `emby.example.com` | `http://emby.example.com:8096` | 见下方「为什么默认 http」 |
 ///
+/// 补充规则：
+/// - 显式写出的端口**原样保留**（`http://host:80` 不会被改写成 `http://host`）；
+///   只有「显式 scheme + 隐式端口」才交给 scheme 默认值，URL 保持干净。
+/// - 主机名统一转小写（DNS 大小写不敏感，避免同一台服务器产生两条记录）。
+/// - 显式 scheme 时允许 `http://user:pass@host` 形式的 userinfo（会被丢弃，
+///   本项目不做 Basic 认证）；没有 scheme 时出现 `@` 视为非法输入（更可能是邮箱）。
+/// - 输入里的 query / fragment 一律丢弃，只保留路径前缀。
+///
 /// **为什么无 scheme 时默认 `http` 而不是 `https`**：
 /// 1. Emby 服务端出厂配置就是 `http://<ip>:8096`，局域网内绝大多数部署没有证书；
 /// 2. 自动发现（UDP 7359）返回的 `Address` 也是 `http://...:8096`；
@@ -122,24 +130,43 @@ public enum ServerAddressValidator {
 
         // 5) host / port
         guard let hostPort = splitHostPort(text) else { return nil }
-        guard isValidHost(hostPort.host) else { return nil }
-        guard let port = resolvePort(hostPort.port, scheme: scheme) else { return nil }
+        // 主机名大小写不敏感，统一小写，避免同一台服务器因大小写产生两条记录。
+        let host = hostPort.host.lowercased()
+        guard isValidHost(host) else { return nil }
+
+        let explicitPort = hostPort.port.flatMap { $0.isEmpty ? nil : $0 }
+        let port: Int
+        if let explicitPort {
+            guard let value = parsePort(explicitPort) else { return nil }
+            port = value
+        } else if hadExplicitScheme {
+            // 显式写了 scheme 却没写端口：尊重 scheme 的默认端口（80 / 443）。
+            port = scheme == "https" ? httpsDefaultPort : httpDefaultPort
+        } else {
+            // 什么都没写：按 Emby 出厂默认端口猜。
+            port = defaultPort
+        }
 
         // 6) 组装 URL
         var components = URLComponents()
         components.scheme = scheme
-        if hostPort.host.contains(":") {
+        if host.contains(":") {
             // IPv6 字面量必须带方括号，否则 URLComponents 会返回 nil。
-            components.percentEncodedHost = "[\(hostPort.host)]"
+            components.percentEncodedHost = "[\(host)]"
         } else {
             // 用 `host`（而非 `percentEncodedHost`）让 Foundation 处理 IDN → punycode。
-            components.host = hostPort.host
+            components.host = host
         }
-        components.port = port
+        // 只有「用户显式写了端口」或「端口是我们猜出来的」才写进 URL；
+        // 显式 scheme + 隐式端口时交给 scheme 默认值，URL 更干净
+        // （`https://emby.example.com` 不会变成 `https://emby.example.com:443`）。
+        if explicitPort != nil || !hadExplicitScheme {
+            components.port = port
+        }
         components.percentEncodedPath = path
 
         guard let url = components.url, url.host() != nil else { return nil }
-        return Parsed(url: url, scheme: scheme, host: hostPort.host, port: port, path: path)
+        return Parsed(url: url, scheme: scheme, host: host, port: port, path: path)
     }
 
     // MARK: - 内部步骤
@@ -206,16 +233,11 @@ public enum ServerAddressValidator {
         return (text, nil)
     }
 
-    /// 决定实际端口：显式端口优先，否则按 scheme 取默认值。
+    /// 校验显式写出的端口。
     ///
-    /// - Parameters:
-    ///   - raw: 端口原文（`nil` 表示未写端口）。
-    ///   - scheme: 实际使用的 scheme。
-    /// - Returns: 端口；端口非法（非数字 / 越界）时为 `nil`。
-    private static func resolvePort(_ raw: String?, scheme: String) -> Int? {
-        guard let raw, !raw.isEmpty else {
-            return scheme == "https" ? httpsDefaultPort : httpDefaultPort
-        }
+    /// - Parameter raw: 端口原文（调用方已排除空串）。
+    /// - Returns: 端口；非纯数字或越界时为 `nil`。
+    private static func parsePort(_ raw: String) -> Int? {
         guard raw.count <= 5,
               raw.allSatisfy({ $0.isASCII && $0.isNumber }),
               let value = Int(raw),

@@ -10,6 +10,20 @@ import PrismCore
 /// - Important: `PlaySessionId` 由服务器每次生成一个新值，**必须**原样带到
 ///   `/Sessions/Playing`、`/Sessions/Playing/Progress`、`/Sessions/Playing/Stopped`，
 ///   而且转码 URL 里已经内嵌了它 —— 不要改写、不要缓存复用。
+///
+/// ## ⚠️ `DirectStreamUrl` 存在 ≠ 能直封（最容易踩的坑）
+///
+/// 抓包实证：**需要转码时 Emby 照样返回 `DirectStreamUrl`**，其值常常与 `TranscodingUrl`
+/// 完全相同（都带 `TranscodeReasons=`）。因此**判定直封能力只能看
+/// `MediaSource.SupportsDirectStream` 这个布尔值**，不能看 `DirectStreamUrl` 是否存在。
+///
+/// 正确的判定顺序：
+/// 1. `SupportsDirectPlay == true` 且本地解码器支持该容器/编码 → DirectPlay
+/// 2. 否则 `SupportsDirectStream == true` → DirectStream（用 `DirectStreamUrl`）
+/// 3. 否则 → Transcode（用 `TranscodingUrl`）
+///
+/// 来源：<https://emby.media/community/topic/92430-session-playstate-mediasourceid-session-fullplayingitemgetmediasources>
+/// （真实会话 JSON 里 `SupportsDirectStream: false` 却仍返回了 `DirectStreamUrl`）。
 public struct PlaybackInfoResponse: Sendable, Codable, Hashable {
     /// 可用的媒体源（已按请求里的 `DeviceProfile` 计算过）。
     public let mediaSources: [MediaSource]

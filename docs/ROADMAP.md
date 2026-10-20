@@ -48,11 +48,16 @@
 
 ### AetherEngine 的主要风险（已接受）
 
-- **单人维护**：265 星，作者 Vincent Herbst → 缓解：锁定 `7.44.0` 精确版本，不跟随 latest；LGPL 允许随时 fork。
+- **单人维护**：265 星，作者 Vincent Herbst；README 自述用 AI 辅助开发（`Co-Authored-By: Claude`），87 个 open issues → 缓解：锁定 `7.44.0` 精确版本，不跟随 latest；LGPL 允许随时 fork。
+- **工具链门槛硬**：Swift 6.4 / Xcode 27.0+ / **至少 macOS 26.2 SDK**（`VTRegisterSupplementalVideoDecoderIfAvailable` 是 iOS/tvOS 26.2 API，需编译期存在）。本机 Xcode 27.1 满足，**CI 镜像必须跟上**。
 - **7.x 刚抬升平台门槛**（原 iOS 16/macOS 14）→ 我们本来就用 macOS 15，无影响。
-- **依赖链较长**（FFmpegBuild / LibDovi / LibTrueHD 等）→ 全部锁定精确版本。
-- **体积未实测** → M3 首个集成任务必须实测 .app 增量。
-- **XcodeGen 不支持 SPM traits**（2.45.4 会静默丢弃 `traits:`）→ 我们默认全关 traits，不受影响。
+- **依赖链较长**：`FFmpegBuild`(171 MB) / `LibDovi`(160 MB) / `SMBClient`(45 MB) 三个额外 clone，共 422 MB → CI 必须缓存 `.build/repositories`。`SMBClient` 我们不用（`otool -L` 确认未链接），但 SwiftPM 仍会 clone。
+- **XcodeGen 不支持 SPM traits**（README 原文：2.45.4 会静默丢弃 `traits:`）→ v1.0 默认全关 traits，不受影响；将来想启用需手工 patch `.pbxproj`。
+- **macOS 上的系统能力缺口**（源码核实）：
+  - Now Playing 会话 API 全部被 `#if os(tvOS)||os(iOS)` 门控 → **v1.0 需自研**（T3.5）
+  - 字幕样式无引擎 API → 我们自绘（其实是优势）
+  - AirPlay 在 macOS 上**未查到确证** → ⚠️【待验证】
+  - macOS 26.4 上 `AVPictureInPictureController` 软解路径有已知缩放 bug
 
 ---
 
@@ -178,7 +183,7 @@ Prism/
 | T3.2 | 协商：DeviceProfile、PlaybackInfo、直连/转码选路、失败降级 | playback-negotiation | T1.3,T3.1 | 三种播放方式都能出画面 | `Sources/PrismPlayback/Negotiation` |
 | T3.3 | 播放器 UI：控制条、进度悬停预览、音轨/字幕菜单、全屏、自动隐藏 | player-ui | T3.1,T1.5 | 键鼠全流程无死角 | `Sources/PrismUI/Player` |
 | T3.4 | 进度上报与续播：Playing/Progress/Stopped、90% 完播判定 | progress-sync | T3.1,T1.3 | 退出重进误差 <10s | `Sources/PrismPlayback/Progress` |
-| T3.5 | 系统能力接线：Now Playing、媒体键、防休眠、PiP、AirPlay（AetherEngine 原生支持） | system-integration | T3.1 | 控制中心显示元数据与进度；PiP/投送可用 | `Sources/PrismPlayback/System` |
+| T3.5 | 系统能力：Now Playing + 媒体键（**macOS 需自研**，源码已核实引擎的 NowPlaying 会话 API 被 `#if os(tvOS)\|\|os(iOS)` 门控）+ PiP 接线 + 防休眠 | system-integration | T3.1 | 控制中心显示元数据与进度；PiP 可开 | `Sources/PrismPlayback/System` |
 | T3.6 | 字幕：内嵌/外挂、ASS 样式、延迟、字体、位置 | subtitles | T3.1 | ASS 特效正常，延迟可调 | `Sources/PrismPlayback/Subtitles` |
 
 ### Wave 4 — 打磨（M4）

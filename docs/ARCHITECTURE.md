@@ -301,23 +301,58 @@ v1.0 的实现类是 `AetherEngineAdapter`，内部持有 AetherEngine 的 `play
 **铁律：`import AetherEngine` 只允许出现在 `Sources/PrismPlayback/Engine/AetherEngineAdapter.swift` 一个文件里**
 （CI 用 `grep -rl "import AetherEngine" --include=*.swift | grep -v AetherEngineAdapter` 检查）。
 
-| 我们的协议 | AetherEngine | 适配要点 |
-|---|---|---|
-| `load(_:)` | `try await player.load(url:startPosition:options:)` | `PlaybackRequest.headers` → `options.httpHeaders`（Emby 鉴权头） |
-| `play()` / `pause()` | `player.play()` / `player.pause()` | 直接映射 |
-| `seek(to:)` | `await player.seek(to: seconds)` | `Ticks` → `Double` 秒 |
-| `setRate(_:)` | `player.setRate(_:)` | 上限受 `player.maxSupportedRate` 约束（视频 2x） |
-| `setVolume(_:)` | **AetherEngine 无音量 API** | 用 `AVAudioEngine`/系统音量或加一层 `MPVolumeView` 等价物 → 标【待验证】 |
-| `selectAudioTrack(_:)` | `player.selectAudioTrack(index:)` | 直接用 `MediaStream.index` |
-| `selectSubtitleTrack(_:)` | `player.selectSubtitleTrack(index:)` / `clearSubtitle()` | `nil` → `clearSubtitle()` |
-| `events` | `player.$state` / `$errorInfo` 是 **Combine `@Published`** | **需要桥接**：`AsyncStream` + `publisher.values`，或用 `for await` |
-| `renderView` | `AetherPlayerSurface(engine:)`（SwiftUI）或 `AetherPlayerView`（AppKit） | SwiftUI 直接嵌入，**不需要 `NSViewRepresentable`** |
-| 音轨/字幕列表 | `player.subtitleTracks`（`[TrackInfo]`）等 | 映射为我们的 `TrackInfo` |
-| 字幕延迟 | `player.subtitleCues` 提供 cue 与位置 | 延迟设置需查实际 API → 标【待验证】 |
-| PiP / AirPlay / Now Playing | **引擎原生支持** | 不再需要 T3.5 的自研工作，改为「接线 + 元数据注入」 |
+> **下表由主管直接读 AetherEngine 7.44.0 源码逐条核对**（`.spike/engine/.build/checkouts/AetherEngine/`），
+> 比官方 README 更可靠——README 漏写了多条已存在的 API。
+> `AetherEngine.swift` 行号对应 tag `7.44.0`。
 
-**待验证项**（M3 集成时确认）：音量控制方式、字幕延迟 API、`maxSupportedRate` 的实际约束、
-`$state` 的 Combine 桥接在 Swift 6 严格并发下的 `Sendable` 处理。
+| 我们的协议 | AetherEngine 实际 API | 状态 |
+|---|---|---|
+| `load(_:)` | `try await player.load(url:startPosition:options:)`，`options.httpHeaders` 收 Emby 鉴权头 | ✅ 直接映射 |
+| `play()` / `pause()` | `player.play()` / `player.pause()` | ✅ 直接映射 |
+| `seek(to:)` | `await player.seek(to: seconds)` （还有 `seek(toSourceTime:)`） | ✅ 直接映射 |
+| `setRate(_:)` | `player.setRate(_:)`（`Float`，上限 `player.maxSupportedRate`） | ✅ 上限实测 **2.0**（视频）；音频 3.0 |
+| `setVolume(_:)` | **`player.volume: Float`（源码 line 7302，get/set 均在，0.0–1.0）** | ✅ **上一版文档误判为缺口，实际存在** |
+| `selectAudioTrack(_:)` | `player.selectAudioTrack(index: Int)`（line 7388） | ✅ 直接映射 |
+| `selectSubtitleTrack(_:)` | 见 §3.2（需按字幕来源分路径） | ◐ 需适配 |
+| `setSubtitleDelay(_:)` | `player.setSoftwareSubtitleDelay(_ seconds: Double)`（line 801） | ✅ 存在；**仅作用于软件字幕合成路径**，需在文档注释写明 |
+| `setSubtitleStyle(_:)` | **无引擎 API** | ❌ 缺口，见 §3.3 |
+| `setSubtitleFile(_:)` | 外部文件作为一等字幕轨注册 | ◐ 需适配 |
+| `events` | `player.$state` / `$errorInfo` 是 **Combine `@Published`** | ◐ 需桥接为 `AsyncStream`，见 §3.2 |
+| `renderView` | `AetherPlayerSurface(engine:)`（SwiftUI）/ `AetherPlayerView`（AppKit）+ `player.bind(view:)` | ✅ SwiftUI 直接嵌入 |
+| 音轨/字幕列表 | `player.subtitleTracks`（`[TrackInfo]`）等 | ✅ |
+| 缓冲进度 | `player.bufferedPosition`、`player.clock` | ✅ |
+| 是否可 seek | `player.canSeek` | ✅ |
+| `stop()` | `player.stop(resetDisplayCriteria:finalTeardown:)` | ✅ |
+
+### 3.2 Combine → AsyncStream 桥接（必须做）
+
+AetherEngine 用 Combine `@Published`，我们的契约要求 `AsyncStream<PlaybackEvent>`。
+桥接时注意 **`AnyCancellable` 不是 `Sendable`**，不能直接存进 actor 属性：
+
+```swift
+// 正确做法：用 Task 持有订阅，或用 AsyncPublisher
+for await state in player.$state.values { ... }
+```
+
+`player.$state.values` 是 `AsyncPublisher`，在 Swift 6 严格并发下可直接 `for await`。
+**优先用它，避免手写 `sink` + `AnyCancellable`。**
+
+### 3.3 三个真实缺口（源码核实，不是猜的）
+
+| 缺口 | 事实 | 应对 |
+|---|---|---|
+| **字幕样式** | 引擎只给 `$subtitleCues`（cue 自带样式），**无用户偏好 API**（字号/颜色/描边/位置） | **这其实是优势**：字幕由我们自己绘制，样式完全可控。代价是 ASS 复杂排版不如 libass。UI 侧按我们的 `SubtitleStyle` 自己渲染 |
+| **macOS 无 Now Playing 会话** | `audioNowPlayingSession` / `ownsVideoNowPlayingSession` / `videoNowPlayingSession` / `setVideoNowPlayingInfo` / `setAudioNowPlayingInfo` **全部被 `#if os(tvOS) \|\| os(iOS)` 门控**，macOS 上不存在 | **T3.5 仍是我们的工作**：用 `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` 自行实现。注意 `setExternalMetadata(_:)` **未被门控**，在 macOS 可用，AVKit 会把它作为 Now Playing 信息再发布 |
+| **PiP** | `pictureInPictureActive`（line 813）与 `softwarePiPSource`（line 955）**未被平台门控** → macOS 可用 | ✅ 可用。但请注意 **macOS 26.4 上 `AVPictureInPictureController.ContentSource(sampleBufferDisplayLayer:)` 有已知缩放 bug**（软解路径受影响），原生路径不受影响 |
+
+**AirPlay 在 macOS 上的支持情况：未查到确证**（源码中未发现 `allowsExternalPlayback` 或 `AVRoutePickerView` 的公开用法）。
+标注 ⚠️【待验证】，在 T1.8 spike 中用 `AVRoutePickerView` 实测。
+
+### 3.4 部署门槛（硬约束）
+
+AetherEngine 7.x 要求：**macOS 15+ / Swift 6.4 / Xcode 27.0+ / 至少 macOS 26.2 SDK**。
+最后一条来自 `VTRegisterSupplementalVideoDecoderIfAvailable`（iOS/tvOS 26.2 API，需在编译期存在）。
+本机 Xcode 27.1 满足；**CI 镜像必须跟上，否则无法构建**。
 
 ---
 
