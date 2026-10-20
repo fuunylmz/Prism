@@ -11,7 +11,7 @@ struct PrismApp: App {
         WindowGroup {
             RootView()
         }
-        .defaultSize(width: 1120, height: 720)
+        .defaultSize(width: 1280, height: 800)
         .commands {
             CommandGroup(replacing: .newItem) {}
             // 导航类快捷键（⌘1/⌘2/⌘3、⌘F、⌘,、⌘⇧S、Esc 返回）由 AppShell 提供；
