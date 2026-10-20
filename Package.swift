@@ -74,6 +74,10 @@ let package = Package(
         .target(
             name: "PrismUI",
             dependencies: ["PrismCore", "EmbyAPI", "PrismData", "PrismPlayback"],
+            // 品牌色 AccentColor（深/浅两套）放在这里。用资源目录而非写死 hex，
+            // 是为了保留系统「增强对比度」「降低透明度」等辅助功能，
+            // 以及让 `Color.accentColor` 跟随我们定义的品牌色。
+            resources: [.process("Resources")],
             swiftSettings: sharedSwiftSettings
         ),
         .testTarget(

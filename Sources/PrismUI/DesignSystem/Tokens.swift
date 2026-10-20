@@ -81,12 +81,23 @@ public enum Typography {
 /// 但落地时统一收敛到 HIG 语义色：v1.0 的「影院感」由布局、留白与海报本身承担，
 /// 而不是靠自定义灰阶。
 ///
-/// > 后续如需 Prism 品牌紫（`#7B5CFF`），应由 Asset Catalog 的 AccentColor 提供
-/// > （Any / Dark 两套），届时只需把 ``accent`` 换成 `Color("AccentColor")`，
-/// > 调用点无需改动。当前 PrismUI target 没有资源目录，故使用系统强调色。
+/// > 品牌色已落地：`Sources/PrismUI/Resources/Assets.xcassets/AccentColor.colorset`
+/// > 提供深/浅两套（浅色 `#7B5CFF`，深色 `#3EC6FF`），``accent`` 走 `Color.accentColor`。
 public enum Palette {
-    /// 强调色：跟随系统「外观 › 强调色」设置，用于主按钮、选中态、进度条、焦点环。
-    public static let accent: Color = Color(nsColor: .controlAccentColor)
+    /// 品牌强调色：主按钮、选中态、进度条、焦点环。
+    ///
+    /// 来源是 `Assets.xcassets` 的 `AccentColor`，**深色与浅色各一套**。
+    /// 用资源目录而不是写死 `Color(red:green:blue:)` 的理由：
+    /// 1. 保留系统「增强对比度」「降低透明度」的自动调整；
+    /// 2. 与 App 的全局 AccentColor 一致；
+    /// 3. 改色只需编辑 `.colorset`，代码零改动。
+    ///
+    /// 资源缺失时（如某些测试环境）`Color.accentColor` 会回退到系统强调色，不会崩。
+    public static let accent: Color = Color.accentColor
+
+    /// 系统强调色：用户可在「系统设置 › 外观 › 强调色」自定义。
+    /// 需要「跟随用户偏好」的场景用它；品牌场景用 ``accent``。
+    public static let systemAccent: Color = Color(nsColor: .controlAccentColor)
 
     /// 窗口底色（L0）。深色下接近 `#1E1E1E`，浅色下接近 `#ECECEC`。
     public static let surface: Color = Color(nsColor: .windowBackgroundColor)
