@@ -5,14 +5,6 @@ import EmbyAPI
 import PrismPlayback
 import SwiftUI
 
-// MARK: - 类型消歧
-//
-// macOS 27 SDK 的 Foundation 新增了 `Foundation.ProgressReporter`
-// （与 Xcode 的进度上报机制相关，`@available(macOS 27, *)`），
-// 与本模块依赖的 `PrismPlayback.ProgressReporter` 撞名。
-// 用别名固定指向播放层那一个，避免每个使用点都要写模块限定。
-private typealias PlaybackProgressReporter = PrismPlayback.ProgressReporter
-
 // MARK: - 播放编排
 
 /// 把「点播放」到「真正出画面」之间的所有环节串起来。
@@ -100,6 +92,7 @@ public final class PlaybackCoordinator {
             await reporter.stop(position: playerModel.position)
             self.reporter = nil
         }
+        playerModel.onPositionUpdate = nil
         if let engine {
             await playerModel.detach()
             await engine.stop()
@@ -194,6 +187,30 @@ public final class PlaybackCoordinator {
         )
         await reporter.start(position: plan.startPosition)
         self.reporter = reporter
+
+        // 位置推进时驱动上报。上报器内部做「10 秒 + 交互即时」的节流与去重，
+        // 所以这里可以放心地把引擎 4Hz 的位置全推过去。
+        playerModel.onPositionUpdate = { [weak self] position, isPaused in
+            guard let self else { return }
+            Task { await self.reportPosition(position, isPaused: isPaused) }
+        }
+    }
+
+    /// 转发一次位置上报。
+    private func reportPosition(_ position: Ticks, isPaused: Bool) async {
+        await reporter?.report(position: position, isPaused: isPaused)
+    }
+
+    /// 上报一次「交互」（暂停 / 恢复 / 跳转 / 切轨）。
+    ///
+    /// 这些场景位置可能没变，`report` 会被去重规则吞掉，必须走 `reportInteraction`。
+    public func reportInteraction(_ event: ProgressEvent) async {
+        guard let reporter else { return }
+        await reporter.reportInteraction(
+            event,
+            position: playerModel.position,
+            isPaused: playerModel.state == .paused
+        )
     }
 
     private func subtitleText(for item: MediaItem) -> String? {

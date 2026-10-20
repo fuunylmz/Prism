@@ -298,7 +298,7 @@ public enum PlaybackEvent: Sendable {
 }
 
 public protocol PlaybackEngine: AnyObject, Sendable {
-    @MainActor var renderView: NSView { get }        // 嵌入 SwiftUI 的 NSViewRepresentable
+    @MainActor var renderView: AnyView { get }        // 直接塞进 SwiftUI 的 body
     func load(_ request: PlaybackRequest) async throws
     func play() async
     func pause() async

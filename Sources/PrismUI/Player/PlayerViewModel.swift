@@ -324,6 +324,15 @@ public final class PlayerViewModel {
     /// 消费一条播放事件。
     ///
     /// - Parameter event: 引擎事件。
+    /// 位置观察回调：每当播放位置推进时触发，供**进度上报**使用。
+    ///
+    /// 为什么不直接让编排器消费 `engine.events`：那个 `AsyncStream` 是**单消费者**的，
+    /// 已被本视图模型占用（见 `PlaybackEngine.events` 的文档）。所以由这里做一次转发，
+    /// 而不是让两个地方抢同一个流。
+    ///
+    /// - Note: 在 `@MainActor` 上调用；实现里不要做重活（上报器内部会节流）。
+    public var onPositionUpdate: ((Ticks, Bool) -> Void)?
+
     private func apply(_ event: PlaybackEvent) {
         switch event {
         case let .stateChanged(newState):
@@ -331,6 +340,7 @@ public final class PlayerViewModel {
 
         case let .positionChanged(newPosition, engineDuration):
             handlePosition(newPosition, engineDuration: engineDuration)
+            onPositionUpdate?(position, state == .paused)
 
         case let .durationChanged(newDuration):
             // 坑 1：只认这条事件。0 值视为「还没准备好」，不覆盖已有值。
