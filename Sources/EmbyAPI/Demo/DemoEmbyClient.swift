@@ -352,6 +352,10 @@ public actor DemoEmbyClient {
     /// 同一 `itemId` + `kind` + `size` 永远得到同一张图，因此可以安全地被
     /// 图片缓存层重复请求。
     ///
+    /// 种子**只用 `itemId`**（不掺入 `kind`），这样同一部作品的海报与背景图共享同一套
+    /// 色相身份，只是构图不同 —— 与 `PrismUI` 里按 URL 生成的路径保持一致，
+    /// 两条取图路径不会出现同一部电影两种颜色。
+    ///
     /// - Parameters:
     ///   - itemId: 条目 id（未知 id 也会生成一张图，不会抛错）。
     ///   - kind: 图片类型。
@@ -362,7 +366,7 @@ public actor DemoEmbyClient {
         try await prepare()
         let title = DemoLibrary.item(id: itemId)?.name
         return DemoArtwork.image(
-            seed: itemId + ":" + kind.rawValue,
+            seed: itemId,
             kind: kind,
             size: size,
             title: title

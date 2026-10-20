@@ -15,7 +15,7 @@ import PackageDescription
 /// - PrismCore：基础模型、日志、设置存储、通用工具（无依赖）
 /// - EmbyAPI：Emby 网络层与 DTO（依赖 PrismCore）
 /// - PrismData：本地缓存 / Keychain / 图片缓存（依赖 PrismCore、EmbyAPI）
-/// - PrismPlayback：播放引擎（依赖 PrismCore，后续接 MPVKit）
+/// - PrismPlayback：播放引擎（依赖 PrismCore + AetherEngine）
 /// - PrismUI：设计系统与界面（依赖以上全部）
 
 /// 所有 target 共享的 Swift 编译设置。
@@ -51,6 +51,12 @@ let package = Package(
         .library(name: "PrismPlayback", targets: ["PrismPlayback"]),
         .library(name: "PrismUI", targets: ["PrismUI"])
     ],
+    dependencies: [
+        // 播放内核：FFmpeg demux + VideoToolbox 解码 + AVPlayer 处理 DV/Atmos。
+        // 许可证 LGPL-3.0 + App Store/DRM 例外，与 GPL-3.0 完全兼容。
+        // 锁定精确版本：上游是单人维护、发版频繁，跟随 latest 会引入不可控变更。
+        .package(url: "https://github.com/superuser404notfound/AetherEngine", exact: "7.44.0")
+    ],
     targets: [
         .target(
             name: "PrismCore",
@@ -68,7 +74,10 @@ let package = Package(
         ),
         .target(
             name: "PrismPlayback",
-            dependencies: ["PrismCore"],
+            dependencies: [
+                "PrismCore",
+                .product(name: "AetherEngine", package: "AetherEngine")
+            ],
             swiftSettings: sharedSwiftSettings
         ),
         .target(
