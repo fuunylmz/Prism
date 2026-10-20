@@ -486,7 +486,9 @@ state=playing videoRoute=loopback backend=native
 
 ### 结论
 
-**通过。** 整个依赖图（含 AetherEngine 自身及其全部 FFmpeg 封装）在 Swift 6 语言模式 + `-strict-concurrency=complete` 下 **0 warning / 0 error**。
+**通过（针对 Prism 侧的调用代码）。** 整个依赖图在 Swift 6 语言模式 + `-strict-concurrency=complete` 下 **0 error**，且 **Prism 侧 4 个 target 0 warning**。
+
+> ⚠️ **重要限定**：AetherEngine 自身模块的编译命令行里带着 `-suppress-warnings`（SwiftPM 给依赖包注入的），所以**它的 warning 被吞掉了，不能据此断言"AetherEngine 内部零并发警告"**。这一点下面单独说明。
 
 ### 配置
 
@@ -531,6 +533,44 @@ Build complete! (32.74秒)
 ```
 
 **诊断输出为空 —— 一条 warning 都没有。** 完整日志在 `/tmp/strict-build.log`（0 行匹配 `warning:|error:`）。
+
+### 但必须说清楚：`-suppress-warnings` 掩盖了依赖包
+
+把 `-v` 打开看真实编译命令行，会发现 AetherEngine 模块与我的 target 拿到的 flag **不一样**：
+
+```bash
+swift build --disable-sandbox --cache-path "$PWD/.build/cache" -v \
+  -Xswiftc -strict-concurrency=complete 2>&1 | grep "module-name AetherEngine "
+```
+
+AetherEngine 模块的命令行里（截取）：
+
+```
+-strict-concurrency=complete
+-enable-testing
+-suppress-warnings        ← 关键
+-swift-version 6
+```
+
+而我的 target（`PlaybackSpike`）里：
+
+```
+-strict-concurrency=complete
+-swift-version 6
+（没有 -suppress-warnings）
+```
+
+`-suppress-warnings` 不是 AetherEngine 自己在 `Package.swift` 里写的（我 grep 过整个 checkout，`suppress-warnings` 零命中），是 **SwiftPM 给非 root 依赖包自动注入的**。
+
+**因此本项的准确结论是：**
+
+| 范围 | 结论 |
+|------|------|
+| **Prism 侧调用代码**（SpikeKit / PlaybackSpike / SubtitleSpike / PlatformProbe） | ✅ **真实 0 warning**，未被抑制 |
+| **AetherEngine 内部** | ⚠️ **无法从本次构建判断** —— warning 被 `-suppress-warnings` 吞掉 |
+| **是否存在编译错误** | ✅ 0 error（error 不会被 suppress） |
+
+**这对 Prism 意味着什么**：Prism 自己写的所有 `AetherEngine` 调用代码（`@MainActor` 上下文、Combine 订阅、`AVMetadataItem` 传递等）在 Swift 6 严格并发下是干净的 —— 这是实际集成时最要紧的部分。AetherEngine 内部是否干净，需要在它的 checkout 里单独跑 `swift build`（不带依赖注入的 suppress）才能确认，**本次未做**。
 
 ### 负向对照：证明严格检查确实生效
 
