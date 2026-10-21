@@ -38,6 +38,11 @@ public struct PlayerTrack: Identifiable, Hashable, Sendable {
     public let isDefault: Bool
     /// 是否外挂轨。
     public let isExternal: Bool
+    /// 是否为强制轨（forced，通常只翻译外语对白）。
+    ///
+    /// 同一部片子常有多条语言相同的字幕（完整轨 + 强制轨），不显示这个标记时
+    /// 两行会完全一样，用户根本没法选。
+    public let isForced: Bool
 
     /// `Identifiable` 要求的 id：轨道索引在同类轨道内唯一。
     public var id: Int { index }
@@ -54,6 +59,7 @@ public struct PlayerTrack: Identifiable, Hashable, Sendable {
     ///   - bitrate: 码率。
     ///   - isDefault: 是否默认轨。
     ///   - isExternal: 是否外挂轨。
+    ///   - isForced: 是否强制轨。
     public init(
         index: Int,
         kind: Kind,
@@ -63,7 +69,8 @@ public struct PlayerTrack: Identifiable, Hashable, Sendable {
         channels: Int? = nil,
         bitrate: Int? = nil,
         isDefault: Bool = false,
-        isExternal: Bool = false
+        isExternal: Bool = false,
+        isForced: Bool = false
     ) {
         self.index = index
         self.kind = kind
@@ -74,9 +81,18 @@ public struct PlayerTrack: Identifiable, Hashable, Sendable {
         self.bitrate = bitrate
         self.isDefault = isDefault
         self.isExternal = isExternal
+        self.isForced = isForced
     }
 
     // MARK: 文案
+
+    /// 菜单主标题。
+    ///
+    /// 语言已知时优先用轨道名（它通常写明了「简体中文 / 繁体中文 / Signs」这类
+    /// 区分信息），否则回退到语言名。轨道名与语言名相同时不会重复。
+    public var displayName: String {
+        trackName ?? languageName
+    }
 
     /// 语言的中文名（未知时回退到标题，再回退到「未知语言」）。
     public var languageName: String {
@@ -140,12 +156,30 @@ public struct PlayerTrack: Identifiable, Hashable, Sendable {
         return parts.joined(separator: " · ")
     }
 
-    /// 字幕轨的副标题：「语言 · 类型 · 内嵌/外挂」。
+    /// 字幕轨的副标题：「语言 · 类型 · 内嵌/外挂 · 强制 · 轨道名」。
+    ///
+    /// 同一语言经常有多条轨（完整 / 强制 / SDH），只写「意大利语 · SRT · 内嵌」
+    /// 会让两行完全一样、无法区分。因此把 `forced` 与容器里的轨道名都带上。
     public var subtitleDetail: String {
         var parts: [String] = [languageName]
         if let codecName { parts.append(codecName) }
         parts.append(isExternal ? "外挂" : "内嵌")
+        if isForced { parts.append("强制") }
+        if let trackName { parts.append(trackName) }
         return parts.joined(separator: " · ")
+    }
+
+    /// 容器里的轨道名；与语言名重复时返回 `nil`（避免「意大利语 · 意大利语」）。
+    ///
+    /// 引擎给的 `name` 常常就是语言名本身，直接拼上去只会更啰嗦。
+    public var trackName: String? {
+        guard let title else { return nil }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        // 与语言展示名相同、或本身就是语言代码时没有额外信息量。
+        if trimmed.caseInsensitiveCompare(languageName) == .orderedSame { return nil }
+        if let language, trimmed.caseInsensitiveCompare(language) == .orderedSame { return nil }
+        return trimmed
     }
 
     /// 菜单里显示的副标题（按轨道类型分派）。
@@ -220,7 +254,7 @@ public struct AudioTrackMenu: View {
             } else {
                 ForEach(tracks) { track in
                     PlayerMenuRow(
-                        title: track.languageName,
+                        title: track.displayName,
                         detail: track.audioDetail,
                         isSelected: track.index == selectedIndex,
                         badge: track.isDefault ? "默认" : nil
@@ -298,7 +332,7 @@ public struct SubtitleTrackMenu: View {
                 PlayerMenuDivider()
                 ForEach(tracks) { track in
                     PlayerMenuRow(
-                        title: track.languageName,
+                        title: track.displayName,
                         detail: track.subtitleDetail,
                         isSelected: track.index == selectedIndex,
                         badge: track.isDefault ? "默认" : nil
@@ -365,6 +399,13 @@ public struct SubtitleTrackMenu: View {
 // MARK: - 菜单公共组件
 
 /// 菜单容器：统一标题、宽度与内边距。
+///
+/// ## 为什么列表必须可滚动
+///
+/// 一部多语种片源可能有 20 条以上字幕轨。容器早期是纯 `VStack`，既没有滚动容器
+/// 也没有高度上限，面板会被撑到超出屏幕、内容被裁掉——滚轮完全没有反应，
+/// 用户只能看到最上面几条。现在列表放进 ``ScrollableMenuList``，标题与底部说明
+/// 固定，中间区域按内容高度自适应并在超过上限后滚动。
 private struct PlayerMenuContainer<Content: View, Footer: View>: View {
     let title: LocalizedStringKey
     let content: Content
@@ -387,8 +428,10 @@ private struct PlayerMenuContainer<Content: View, Footer: View>: View {
                 .foregroundStyle(Palette.textSecondary)
                 .padding(.horizontal, Spacing.sm)
 
-            VStack(alignment: .leading, spacing: 2) {
-                content
+            ScrollableMenuList {
+                VStack(alignment: .leading, spacing: 2) {
+                    content
+                }
             }
 
             Divider()
@@ -398,6 +441,67 @@ private struct PlayerMenuContainer<Content: View, Footer: View>: View {
         }
         .padding(Spacing.md)
         .frame(width: 300)
+    }
+}
+
+/// 可滚动的菜单列表：内容少时贴合内容高度，内容多时封顶并滚动。
+///
+/// 高度靠测量内容得出（`GeometryReader` + preference），而不是写死：
+/// 只有一条音轨时不该留一大片空白，而有 20 条字幕轨时必须能滚动。
+struct ScrollableMenuList<Content: View>: View {
+    /// 列表区域的最大高度（pt）。加上标题与底部说明后，整个面板仍能放进笔记本屏幕。
+    static var maxHeight: CGFloat { 320 }
+
+    let content: Content
+
+    /// 内容实际高度；初始取上限，避免首帧从 0 高度「弹开」。
+    @State private var contentHeight: CGFloat = ScrollableMenuList.maxHeight
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    /// 把内容高度夹到 `1...maxHeight`。
+    ///
+    /// 抽成纯函数是为了能被单测覆盖：`ScrollView` 的滚动行为没法在离屏渲染里
+    /// 验证（`ImageRenderer` 不绘制滚动内容），但「高度是否被封顶」可以。
+    ///
+    /// - Parameter measured: 测量到的内容高度。
+    /// - Returns: 实际使用的列表高度。
+    static func clampedHeight(for measured: CGFloat) -> CGFloat {
+        guard measured.isFinite else { return maxHeight }
+        return min(max(measured, 1), maxHeight)
+    }
+
+    var body: some View {
+        ScrollView(.vertical) {
+            content
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: MenuContentHeightKey.self,
+                            value: proxy.size.height
+                        )
+                    }
+                }
+        }
+        .scrollIndicators(.automatic)
+        // 内容比上限矮时不弹跳，避免「明明没得滚还回弹」。
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: Self.clampedHeight(for: contentHeight))
+        .onPreferenceChange(MenuContentHeightKey.self) { height in
+            guard height > 0 else { return }
+            contentHeight = height
+        }
+    }
+}
+
+/// 菜单内容的测量高度。
+private struct MenuContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
@@ -630,7 +734,8 @@ public extension PlayerTrack {
             channels: track.channels > 0 ? track.channels : nil,
             bitrate: nil,
             isDefault: track.isDefault,
-            isExternal: track.isExternal
+            isExternal: track.isExternal,
+            isForced: track.isForced
         )
     }
 }

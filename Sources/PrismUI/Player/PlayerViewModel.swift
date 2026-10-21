@@ -375,8 +375,11 @@ public final class PlayerViewModel {
             buffered = Ticks(seconds: duration.seconds * clamped)
 
         case let .tracksChanged(audio, subtitle):
-            audioTracks = audio
-            subtitleTracks = subtitle
+            // 按 stream id 去重：同 id 必然是同一条流。引擎在重建管线 / 切换
+            // 音轨后会重发整张表，偶发把同一条流报两次；不去重的话菜单里会
+            // 出现两行完全一样、无法区分的条目。
+            audioTracks = Self.uniqueTracks(audio)
+            subtitleTracks = Self.uniqueTracks(subtitle)
             reconcileTrackSelection()
 
         case let .subtitleCues(cues):
@@ -476,6 +479,15 @@ public final class PlayerViewModel {
     ///
     /// 引擎在切音轨 / 字幕时会重发整张表；如果之前选中的索引已经不存在（例如外挂
     /// 字幕被移除），回落到第一条，避免菜单里「没有任何勾」。
+    /// 按 stream id 去重，保留首次出现的顺序。
+    ///
+    /// - Parameter tracks: 引擎上报的轨道列表。
+    /// - Returns: 去重后的列表。
+    private static func uniqueTracks(_ tracks: [TrackInfo]) -> [TrackInfo] {
+        var seen = Set<Int>()
+        return tracks.filter { seen.insert($0.id).inserted }
+    }
+
     private func reconcileTrackSelection() {
         if let selectedAudioIndex,
            !audioTracks.contains(where: { $0.playerIndex == selectedAudioIndex }) {
