@@ -1,6 +1,7 @@
 import SwiftUI
 import PrismCore
 import EmbyAPI
+import PrismData
 
 // MARK: - 连接与登录
 
@@ -18,14 +19,18 @@ public struct ConnectView: View {
     /// 传服务器与登录结果两份数据，而不是一个 `PrismSession`——
     /// 因为持久化（会话 + 服务器列表）需要 `ServerConnection`，
     /// 由上层统一做，界面不碰存储。
-    private let onConnected: @MainActor (ServerConnection, AuthSession, Bool) async -> Void
+    private let onConnected: @MainActor (ServerConnection, AuthSession, Credentials, Bool) async -> Void
 
     @State private var model = ConnectViewModel()
 
     /// 创建连接界面。
     ///
-    /// - Parameter onConnected: 登录成功后的回调，第三个参数是「是否记住登录」。
-    public init(onConnected: @escaping @MainActor (ServerConnection, AuthSession, Bool) async -> Void) {
+    /// - Parameter onConnected: 登录成功后的回调。`Credentials` 是本次输入的用户名与密码
+    ///   （上层在「记住我」时会把它们存下来，下次启动直接重新登录），
+    ///   最后一个参数是「是否记住登录」。
+    public init(
+        onConnected: @escaping @MainActor (ServerConnection, AuthSession, Credentials, Bool) async -> Void
+    ) {
         self.onConnected = onConnected
     }
 
@@ -44,7 +49,12 @@ public struct ConnectView: View {
                         SignInStepView(model: model) {
                             if let server = model.selectedServer,
                                let auth = await model.signIn() {
-                                await onConnected(server, auth, model.rememberMe)
+                                await onConnected(
+                                    server,
+                                    auth,
+                                    Credentials(username: model.username, password: model.password),
+                                    model.rememberMe
+                                )
                                 model.finishConnecting()
                             }
                         }

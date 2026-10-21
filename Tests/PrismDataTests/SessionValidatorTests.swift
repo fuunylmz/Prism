@@ -81,7 +81,7 @@ struct SessionValidatorTests {
     private struct Fixture {
         let suiteName: String
         let secure: InMemorySecureStore
-        let store: SessionStore
+        let store: CredentialStore
         let registry: ServerRegistry
         let restoration: SessionRestoration
 
@@ -89,7 +89,7 @@ struct SessionValidatorTests {
             let name = "test.prism.validator.\(UUID().uuidString)"
             suiteName = name
             secure = InMemorySecureStore()
-            store = SessionStore(secureStore: secure)
+            store = CredentialStore(secureStore: secure)
             registry = ServerRegistry(defaults: try #require(UserDefaults(suiteName: name)))
             restoration = SessionRestoration(store: store, registry: registry)
         }
@@ -115,6 +115,8 @@ struct SessionValidatorTests {
             let url = try #require(URL(string: "http://192.168.1.10:8096"))
             try await restoration.signIn(
                 session,
+                username: "alice",
+                password: "secret",
                 server: ServerConnection(id: session.serverId, name: serverName, baseURL: url)
             )
         }
@@ -168,7 +170,7 @@ struct SessionValidatorTests {
         // 关键断言：成功路径绝不能顺手再打 /Users/Me（那会让 Emby 每次都多一次 404）
         #expect(await stub.recordedCurrentUserCount == 0)
         // token 当然不该被动
-        #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice")?.accessToken == "token-abc")
+        #expect(try await fixture.store.credential(serverId: "srv-a", userId: "alice") != nil)
     }
 
     @Test("Emby 场景：服务器没有 /Users/Me，仅靠 /Users/{Id} 也能校验通过")
@@ -188,7 +190,7 @@ struct SessionValidatorTests {
         #expect(user == fresh)
         #expect(await stub.recordedCurrentUserCount == 0)
         // 会话完好：Emby 用户不该因为「Jellyfin 专属端点不存在」而被登出
-        #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice") != nil)
+        #expect(try await fixture.store.credential(serverId: "srv-a", userId: "alice") != nil)
         #expect(await fixture.restoration.knownServers().count == 1)
     }
 
@@ -212,7 +214,7 @@ struct SessionValidatorTests {
         #expect(await stub.recordedByIdArguments == [session.userId])
         #expect(await stub.recordedCurrentUserCount == 1)
         // 回退成功说明 token 有效，不能清
-        #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice") != nil)
+        #expect(try await fixture.store.credential(serverId: "srv-a", userId: "alice") != nil)
     }
 
     // MARK: - 401
@@ -231,7 +233,7 @@ struct SessionValidatorTests {
 
         #expect(user == nil)
         // markLoggedOut 生效：这台服务器上没有会话了
-        #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice") == nil)
+        #expect(try await fixture.store.credential(serverId: "srv-a", userId: "alice") == nil)
         #expect(try await fixture.store.loadAll().isEmpty)
         #expect(try await fixture.store.active() == nil)
         // 401 已经是结论，不需要再试第二个端点
@@ -251,7 +253,7 @@ struct SessionValidatorTests {
         let user = try await validator.validate(session)
 
         #expect(user == nil)
-        #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice") == nil)
+        #expect(try await fixture.store.credential(serverId: "srv-a", userId: "alice") == nil)
 
         // 服务器记录必须还在：用户重新登录时只需输密码，不用重填地址
         let kept = await fixture.registry.server(id: "srv-a")
@@ -278,8 +280,8 @@ struct SessionValidatorTests {
 
         #expect(try await validator.validate(target) == nil)
 
-        #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice") == nil)
-        #expect(try await fixture.store.session(serverId: "srv-b", userId: "bob")?.accessToken == "token-b")
+        #expect(try await fixture.store.credential(serverId: "srv-a", userId: "alice") == nil)
+        #expect(try await fixture.store.credential(serverId: "srv-b", userId: "bob") != nil)
         #expect(await fixture.registry.server(id: "srv-b") != nil)
     }
 
@@ -300,7 +302,7 @@ struct SessionValidatorTests {
         #expect(user == nil)
         #expect(await stub.recordedByIdArguments == [session.userId])
         #expect(await stub.recordedCurrentUserCount == 1)
-        #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice") == nil)
+        #expect(try await fixture.store.credential(serverId: "srv-a", userId: "alice") == nil)
         // 服务器记录仍然保留，理由同 401
         #expect(await fixture.registry.server(id: "srv-a") != nil)
     }
@@ -319,7 +321,7 @@ struct SessionValidatorTests {
 
         #expect(user == nil)
         #expect(await stub.recordedCurrentUserCount == 1)
-        #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice") == nil)
+        #expect(try await fixture.store.credential(serverId: "srv-a", userId: "alice") == nil)
     }
 
     // MARK: - 网络错误必须向上抛（离线不登出）
@@ -339,11 +341,14 @@ struct SessionValidatorTests {
         }
 
         // 抛错 ≠ 登出：token 必须原样保留
-        #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice")?.accessToken == "token-abc")
+        #expect(try await fixture.store.credential(serverId: "srv-a", userId: "alice") != nil)
         // 也不该继续去打 /Users/Me 把网络错误掩盖掉
         #expect(await stub.recordedCurrentUserCount == 0)
-        // 下次启动仍然能恢复成已登录（离线可用）
-        #expect(try await fixture.restoration.restore() == .signedIn(session))
+        // 下次启动仍能拿到凭据并重新登录（凭据没被网络错误清掉）。
+        guard case .needsRelogin = try await fixture.restoration.restore() else {
+            Issue.record("凭据应当仍然可用")
+            return
+        }
     }
 
     @Test("服务器不可达同样向上抛，且 token 没有被清除")
@@ -361,7 +366,7 @@ struct SessionValidatorTests {
             _ = try await validator.validate(session)
         }
 
-        #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice") != nil)
+        #expect(try await fixture.store.credential(serverId: "srv-a", userId: "alice") != nil)
         #expect(try await fixture.store.loadAll().count == 1)
         #expect(await stub.recordedCurrentUserCount == 0)
     }
@@ -382,6 +387,6 @@ struct SessionValidatorTests {
         }
 
         #expect(await stub.recordedCurrentUserCount == 1)
-        #expect(try await fixture.store.session(serverId: "srv-a", userId: "alice")?.accessToken == "token-abc")
+        #expect(try await fixture.store.credential(serverId: "srv-a", userId: "alice") != nil)
     }
 }

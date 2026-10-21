@@ -38,12 +38,31 @@ struct SessionBootstrapperTests {
         ServerRegistry(defaults: try #require(UserDefaults(suiteName: suiteName)))
     }
 
-    private func makeFixture(failing: Bool) throws -> (SessionBootstrapper, ServerRegistry, String) {
+    /// 造一个不联网的登录实现：直接返回预设会话。
+    ///
+    /// - Parameter server: 用于构造会话的服务器。
+    /// - Returns: 登录闭包。
+    private static func stubAuth(server: ServerConnection) -> @Sendable (ServerConnection, String, String) async throws -> AuthSession {
+        { _, username, _ in
+            AuthSession(
+                serverId: server.id,
+                userId: "user-1",
+                accessToken: "fresh-token",
+                user: EmbyUser(id: "user-1", name: username, serverId: server.id)
+            )
+        }
+    }
+
+    private func makeFixture(
+        failing: Bool,
+        authenticate: (@Sendable (ServerConnection, String, String) async throws -> AuthSession)? = nil
+    ) throws -> (SessionBootstrapper, ServerRegistry, String) {
         let suiteName = "test.prism.bootstrap.\(UUID().uuidString)"
         let registry = try Self.makeRegistry(suiteName: suiteName)
         let secure: any SecureStoring = failing ? FailingSecureStore() : InMemorySecureStore()
-        let store = SessionStore(secureStore: secure)
-        return (SessionBootstrapper(store: store, registry: registry), registry, suiteName)
+        let store = CredentialStore(secureStore: secure)
+        let bootstrapper = SessionBootstrapper(store: store, registry: registry, authenticate: authenticate)
+        return (bootstrapper, registry, suiteName)
     }
 
     private func makeServer() throws -> ServerConnection {
@@ -71,7 +90,7 @@ struct SessionBootstrapperTests {
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         let server = try makeServer()
 
-        await bootstrapper.signedIn(server: server, auth: makeAuthSession(), persist: true)
+        await bootstrapper.signedIn(server: server, auth: makeAuthSession(), username: "小林", password: "pw", persist: true)
 
         // 地址必须还在：这是「下次不用重打地址」的唯一前提。
         let saved = await registry.servers()
@@ -86,7 +105,7 @@ struct SessionBootstrapperTests {
         let (bootstrapper, _, suite) = try makeFixture(failing: true)
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
 
-        await bootstrapper.signedIn(server: try makeServer(), auth: makeAuthSession(), persist: true)
+        await bootstrapper.signedIn(server: try makeServer(), auth: makeAuthSession(), username: "小林", password: "pw", persist: true)
 
         let message = try #require(bootstrapper.persistenceFailure)
         #expect(message.contains("513"))
@@ -102,16 +121,19 @@ struct SessionBootstrapperTests {
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
 
         let secure = InMemorySecureStore()
-        let store = SessionStore(secureStore: secure)
+        let store = CredentialStore(secureStore: secure)
         let registry = try Self.makeRegistry(suiteName: suite)
         let server = try makeServer()
 
-        let first = SessionBootstrapper(store: store, registry: registry)
-        await first.signedIn(server: server, auth: makeAuthSession(), persist: true)
+        let stub = Self.stubAuth(server: server)
+
+        let first = SessionBootstrapper(store: store, registry: registry, authenticate: stub)
+        await first.signedIn(server: server, auth: makeAuthSession(), username: "小林", password: "pw", persist: true)
         #expect(first.persistenceFailure == nil)
 
-        // 模拟重启：同一份 Keychain 与 UserDefaults，新的引导器。
-        let second = SessionBootstrapper(store: store, registry: registry)
+        // 模拟重启：同一份存储与 UserDefaults，新的引导器。
+        // 注意：这里必须注入桩，否则会真的去连 192.168.1.10。
+        let second = SessionBootstrapper(store: store, registry: registry, authenticate: stub)
         await second.restore()
 
         guard case let .ready(session) = second.phase else {
@@ -120,6 +142,7 @@ struct SessionBootstrapperTests {
         }
         #expect(session.server.id == "srv-media")
         #expect(session.userId == "user-1")
+        #expect(session.accessToken == "fresh-token")
     }
 
     @Test("没有会话时恢复结果是「需要连接」，不会误判为已登录")
@@ -134,13 +157,76 @@ struct SessionBootstrapperTests {
         }
     }
 
+    // MARK: 自动重新登录的结果分支
+
+    @Test("密码已失效：删掉凭据并回到登录页，避免每次启动白试一次")
+    func expiredPasswordDropsCredential() async throws {
+        let server = try makeServer()
+        let suite = "test.prism.bootstrap.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let secure = InMemorySecureStore()
+        let store = CredentialStore(secureStore: secure)
+        let registry = try Self.makeRegistry(suiteName: suite)
+
+        // 先登录成功一次，把凭据存下来。
+        let stub = Self.stubAuth(server: server)
+        let first = SessionBootstrapper(store: store, registry: registry, authenticate: stub)
+        await first.signedIn(server: server, auth: makeAuthSession(), username: "小林", password: "pw", persist: true)
+
+        // 重启时服务器返回 401。
+        let second = SessionBootstrapper(
+            store: store,
+            registry: registry,
+            authenticate: { _, _, _ in throw EmbyError.unauthorized }
+        )
+        await second.restore()
+
+        if case .needsConnection = second.phase {} else {
+            Issue.record("应当回到登录页")
+        }
+        // 凭据必须删掉：留着只会每次启动都白试一次。
+        #expect(try await store.loadAll().isEmpty)
+        // 但服务器地址仍在，登录页能一键选回。
+        #expect(await registry.servers().count == 1)
+        #expect(second.persistenceFailure?.contains("失效") == true)
+    }
+
+    @Test("网络不通：保留凭据，联网后无需重输密码")
+    func networkFailureKeepsCredential() async throws {
+        let server = try makeServer()
+        let suite = "test.prism.bootstrap.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let secure = InMemorySecureStore()
+        let store = CredentialStore(secureStore: secure)
+        let registry = try Self.makeRegistry(suiteName: suite)
+
+        let stub = Self.stubAuth(server: server)
+        let first = SessionBootstrapper(store: store, registry: registry, authenticate: stub)
+        await first.signedIn(server: server, auth: makeAuthSession(), username: "小林", password: "pw", persist: true)
+
+        // 重启时网络不通。
+        let second = SessionBootstrapper(
+            store: store,
+            registry: registry,
+            authenticate: { _, _, _ in throw EmbyError.serverUnreachable("offline") }
+        )
+        await second.restore()
+
+        if case .needsConnection = second.phase {} else {
+            Issue.record("离线时应当回到登录页")
+        }
+        // 关键：离线一次不该把「记住我」作废。
+        #expect(try await store.loadAll().count == 1)
+        #expect(second.persistenceFailure?.contains("无法连接") == true)
+    }
+
     @Test("不记住登录时：地址留下、token 不写")
     func rememberMeFalseKeepsAddressOnly() async throws {
         let (bootstrapper, registry, suite) = try makeFixture(failing: false)
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         let server = try makeServer()
 
-        await bootstrapper.signedIn(server: server, auth: makeAuthSession(), persist: false)
+        await bootstrapper.signedIn(server: server, auth: makeAuthSession(), username: "小林", password: "pw", persist: false)
 
         // 地址留下，方便下次直接点选。
         #expect(await registry.servers().count == 1)

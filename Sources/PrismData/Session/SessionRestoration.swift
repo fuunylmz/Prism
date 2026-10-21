@@ -12,13 +12,19 @@ public enum SessionState: Sendable, Equatable {
     case signedOut
     /// 已恢复登录态。
     case signedIn(AuthSession)
+    /// 本机有可用凭据，但需要先向服务器换取新 token。
+    ///
+    /// 为什么单列一态：客户端存的是用户名 + 密码而不是 token，启动时必须**联网**
+    /// 重新登录一次才能拿到 `AuthSession`。这一步是异步的，UI 需要显示「正在恢复登录」
+    /// 而不是闪一下登录页。拿到会话后由调用方把状态推进到 ``signedIn(_:)``。
+    case needsRelogin(StoredCredential, ServerConnection)
 }
 
-/// 启动恢复流程：把 ``ServerRegistry``（地址、名称）与 ``SessionStore``（token）拼起来。
+/// 启动恢复流程：把 ``ServerRegistry``（地址、名称）与 ``CredentialStore``（用户名 + 密码）拼起来。
 ///
 /// 职责边界：
-/// - ``SessionStore`` 只管 token 的存取，不知道服务器地址；
-/// - ``ServerRegistry`` 只管地址/名称，不知道 token；
+/// - ``CredentialStore`` 只管凭据的存取，不知道服务器地址；
+/// - ``ServerRegistry`` 只管地址/名称，不知道凭据；
 /// - 本类型负责「启动时该显示登录页还是主页」以及「401 之后该清什么、不该清什么」。
 ///
 /// 之所以做成独立的 `struct` 而不是把逻辑塞进 `SessionStore`：恢复流程需要同时协调两个
@@ -27,17 +33,17 @@ public enum SessionState: Sendable, Equatable {
 ///
 /// `Sendable`：两个属性都是 actor，天然 `Sendable`。
 public struct SessionRestoration: Sendable {
-    /// 会话存储。
-    public let store: SessionStore
+    /// 凭据存储。
+    public let store: CredentialStore
     /// 服务器列表。
     public let registry: ServerRegistry
 
     /// 创建恢复器。
     ///
     /// - Parameters:
-    ///   - store: 会话存储。
+    ///   - store: 凭据存储。
     ///   - registry: 服务器列表。
-    public init(store: SessionStore, registry: ServerRegistry) {
+    public init(store: CredentialStore, registry: ServerRegistry) {
         self.store = store
         self.registry = registry
     }
@@ -62,21 +68,24 @@ public struct SessionRestoration: Sendable {
     public func restore() async throws -> SessionState {
         let servers = await registry.servers()
 
-        guard let session = try await store.active(), session.isValid else {
+        guard let credential = try await store.active(), credential.isUsable else {
             return .signedOut
         }
 
-        // 顺手把「上次激活的服务器」校正成实际恢复出来的那台：
-        // 会话是权威来源，registry 里的只是一个 UI 预选提示。只在该服务器确实登记过时
-        // 才写，避免留下一个指向不存在服务器的悬空 id。
-        if servers.contains(where: { $0.id == session.serverId }) {
-            let hinted = await registry.lastActiveServerId
-            if hinted != session.serverId {
-                await registry.setLastActiveServerId(session.serverId)
-            }
+        // 服务器记录缺失就没法登录：地址是发请求的前提，凭据本身不含地址。
+        // 这里不退化成「让用户重填」，而是明确返回未登录——上层会展示登录页，
+        // 并从 registry 里列出已知服务器供一键选择。
+        guard let server = servers.first(where: { $0.id == credential.serverId }) else {
+            return .signedOut
         }
 
-        return .signedIn(session)
+        // 顺手把「上次激活的服务器」校正成实际凭据所在的那台：
+        // 凭据是权威来源，registry 里的只是一个 UI 预选提示。
+        if await registry.lastActiveServerId != server.id {
+            await registry.setLastActiveServerId(server.id)
+        }
+
+        return .needsRelogin(credential, server)
     }
 
     /// 登录成功后调用：保存会话、设为 active，并登记/刷新服务器记录。
@@ -86,9 +95,22 @@ public struct SessionRestoration: Sendable {
     ///   - server: 对应的服务器连接信息；传 `nil` 表示调用方自己维护 registry
     ///     （例如 Demo Mode 或测试）。
     /// - Throws: ``SessionStoreError``。
-    public func signIn(_ session: AuthSession, server: ServerConnection? = nil) async throws {
-        try await store.save(session)
+    public func signIn(
+        _ session: AuthSession,
+        username: String,
+        password: String,
+        server: ServerConnection? = nil
+    ) async throws {
+        let credential = StoredCredential(
+            serverId: session.serverId,
+            userId: session.userId,
+            username: username,
+            password: password,
+            lastSignedInAt: Date()
+        )
+        try await store.save(credential)
         try await store.setActive(serverId: session.serverId, userId: session.userId)
+        await store.removeLegacyTokenFile()
 
         if let server {
             await registry.upsert(server)

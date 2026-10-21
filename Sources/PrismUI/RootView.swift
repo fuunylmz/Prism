@@ -54,8 +54,14 @@ public struct RootView: View {
         case .restoring:
             preparingView
         case .needsConnection:
-            ConnectView { server, auth, persist in
-                await bootstrapper.signedIn(server: server, auth: auth, persist: persist)
+            ConnectView { server, auth, credentials, persist in
+                await bootstrapper.signedIn(
+                    server: server,
+                    auth: auth,
+                    username: credentials.username,
+                    password: credentials.password,
+                    persist: persist
+                )
             }
         case let .ready(session):
             RootShell(
