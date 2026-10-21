@@ -80,32 +80,66 @@ public final class SessionBootstrapper {
         }
     }
 
+    /// 上次持久化是否失败；`nil` 表示没失败过。
+    ///
+    /// 用途：登录后如果会话没能写进本机存储，界面要**明确告诉用户**
+    /// 「本次登录不会被记住」，而不是静默吞掉、让用户下次打开时困惑
+    /// 「为什么又要输一遍」。这正是之前「每次打开都要重新输入服务器」的成因之一。
+    public private(set) var persistenceFailure: String?
+
     /// 登录成功后由 `ConnectView` 调用。
     ///
     /// - Parameters:
     ///   - server: 服务器连接信息。
     ///   - auth: 登录得到的会话。
-    ///   - persist: 是否写入 Keychain（对应界面上的「记住我」）。
+    ///   - persist: 是否写入本机存储（对应界面上的「记住我」）。
     ///     传 `false` 时本次登录照常可用，只是下次启动要重新登录。
     public func signedIn(
         server: ServerConnection,
         auth: AuthSession,
         persist: Bool = true
     ) async {
+        persistenceFailure = nil
+
+        // 服务器地址**无论如何都要登记**：它不含敏感内容，且是「下次不用重打地址」
+        // 的前提。早期实现只在「不记住」的分支里登记，一旦 Keychain 写入失败
+        // （沙盒 + ad-hoc 签名下必现），地址和 token 就都没留下，
+        // 于是每次启动都是全新的登录页。
+        await registry.upsert(server)
+        await registry.markUsed(id: server.id)
+
         if persist {
-            // 持久化失败不阻断本次使用：用户这一轮能正常用，
-            // 下次启动再登录一次即可。
-            try? await restoration.signIn(auth, server: server)
-        } else {
-            // 不记住：只把服务器地址留在列表里（下次不用重填地址），
-            // 但**不写 token**。
-            await registry.upsert(server)
-            await registry.markUsed(id: server.id)
+            do {
+                try await restoration.signIn(auth, server: server)
+            } catch {
+                // 失败不阻断本次使用，但必须让用户知道「下次要重登」。
+                persistenceFailure = (error as? SessionStoreError).map(Self.message(for:)) 
+                    ?? error.localizedDescription
+            }
         }
 
         let session = makeSession(server: server, auth: auth)
         await session.activate()
         phase = .ready(session)
+    }
+
+    /// 把存储错误翻译成用户能懂的话。
+    ///
+    /// - Parameter error: 会话存储错误。
+    /// - Returns: 提示文案。
+    private static func message(for error: SessionStoreError) -> String {
+        switch error {
+        case let .keychain(status, operation):
+            "本机存储不可用（钥匙串 \(operation.rawValue) 返回 \(status)），本次登录不会被记住。"
+        case let .encoding(detail):
+            "会话数据编码失败：\(detail)"
+        case let .decoding(detail):
+            "会话数据格式不兼容：\(detail)"
+        case let .invalidValue(detail):
+            "会话参数不合法：\(detail)"
+        case let .sessionNotFound(serverId, userId):
+            "找不到会话（\(serverId) / \(userId)）。"
+        }
     }
 
     /// 从同步上下文（菜单 / 侧边栏按钮）发起登出。

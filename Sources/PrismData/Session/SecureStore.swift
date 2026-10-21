@@ -239,6 +239,17 @@ public final class KeychainSecureStore: SecureStoring, @unchecked Sendable {
     /// 首次成功调用后确定的实现；`nil` 表示还没解析过。
     private var resolvedKindStorage: KeychainKind?
 
+    /// 探测用的 service 名（只在自动模式解析实现时写一条随即删除的条目）。
+    private static let probeService = "app.prism.Prism.availability-probe"
+
+    /// 数据保护钥匙串可用性的探测实现。
+    ///
+    /// 默认 `nil` 表示走真实的 `SecItemAdd` 探测（`resolvesToDataProtection`）。
+    /// 之所以留这个接缝：这段「先探测再锁定」的逻辑正是「每次打开都要重新输入服务器」
+    /// 那条故障的修复点，必须能被单测直接覆盖——而真实钥匙串在测试里绝不能碰
+    /// （见本文件末尾的说明）。
+    private let dataProtectionProbe: (@Sendable () -> Bool)?
+
     /// 创建实例。
     ///
     /// - Parameters:
@@ -251,12 +262,16 @@ public final class KeychainSecureStore: SecureStoring, @unchecked Sendable {
     ///   —— <https://developer.apple.com/documentation/security/ksecattraccessible>。
     ///   所以文件型钥匙串分支里刻意**不带**这个属性：带上会被当成不匹配的查询条件，
     ///   导致「刚写进去却读不出来」。
+    /// - Parameter dataProtectionProbe: 数据保护钥匙串可用性探测；默认 `nil`
+    ///   表示用真实的 `SecItemAdd` 探测。仅供测试注入，业务代码不要传。
     public init(
         kind: KeychainKind = .automatic,
-        accessibility: KeychainAccessibility = .afterFirstUnlockThisDeviceOnly
+        accessibility: KeychainAccessibility = .afterFirstUnlockThisDeviceOnly,
+        dataProtectionProbe: (@Sendable () -> Bool)? = nil
     ) {
         self.preferredKind = kind
         self.accessibility = accessibility
+        self.dataProtectionProbe = dataProtectionProbe
     }
 
     /// 实际生效的钥匙串实现；尚未发生任何调用时为 `nil`。
@@ -417,10 +432,13 @@ public final class KeychainSecureStore: SecureStoring, @unchecked Sendable {
             return try operation(preferredKind)
 
         case .automatic:
+            // 写入探测决定用哪个实现：空库上的 `load` 返回 notFound，
+            // 不能据此认为数据保护钥匙串可用（详见 `resolvesToDataProtection`）。
+            let kind: KeychainKind = resolvesToDataProtection() ? .dataProtection : .fileBased
             do {
-                let result = try operation(.dataProtection)
+                let result = try operation(kind)
                 lock.lock()
-                resolvedKindStorage = .dataProtection
+                resolvedKindStorage = kind
                 lock.unlock()
                 return result
             } catch let error as SessionStoreError where Self.isUnsupportedInThisEnvironment(error) {
@@ -429,6 +447,41 @@ public final class KeychainSecureStore: SecureStoring, @unchecked Sendable {
                 lock.unlock()
                 return try operation(.fileBased)
             }
+        }
+    }
+
+    /// 「探测」某个实现是否真的可用，但**不锁定**解析结果。
+    ///
+    /// 为什么需要它：`automatic` 的回退只认「操作抛出了 -34018 / -25308」。
+    /// 但读取一个**空**钥匙串时，数据保护实现返回的是 `errSecItemNotFound`
+    /// （-25300）——这在 `load` 里是「正常，没有条目」，于是 `perform` 把它
+    /// 当成成功，把 `resolvedKind` 锁死成 `.dataProtection`。
+    ///
+    /// 结果：登录时第一次 `load`（空库）锁定 dataProtection，随后真正的 `add`
+    /// 返回 -34018，**回退再也不会触发**，会话永远写不进去。
+    /// 在沙盒 + ad-hoc 签名（无 provisioning profile）下这是必现的，
+    /// 表现为「每次打开都要重新输入服务器」。
+    ///
+    /// 修法：自动模式下先做一次**写入探测**（写一条临时条目再删掉），
+    /// 只有真的能写才锁定 `.dataProtection`；否则直接落到 `.fileBased`。
+    private func resolvesToDataProtection() -> Bool {
+        if let dataProtectionProbe {
+            return dataProtectionProbe()
+        }
+
+        let probeAccount = "__prism_probe__"
+        var query = baseQuery(account: probeAccount, service: Self.probeService, kind: .dataProtection)
+        query[kSecValueData as String] = Data([0x00])
+
+        let addStatus = SecItemAdd(query as CFDictionary, nil)
+        switch addStatus {
+        case errSecSuccess, errSecDuplicateItem:
+            // 探测条目清理掉，不留痕迹。
+            let deleteQuery = baseQuery(account: probeAccount, service: Self.probeService, kind: .dataProtection)
+            SecItemDelete(deleteQuery as CFDictionary)
+            return true
+        default:
+            return false
         }
     }
 

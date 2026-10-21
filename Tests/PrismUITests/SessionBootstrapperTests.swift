@@ -1,0 +1,150 @@
+import Foundation
+import Testing
+import PrismCore
+import PrismData
+@testable import PrismUI
+
+/// ``SessionBootstrapper`` 的持久化行为。
+///
+/// 守的是一条真实故障（用户反馈「每次打开都要重新输入服务器」）：
+/// 沙盒 + ad-hoc 签名下数据保护钥匙串返回 `-34018`（缺 entitlement），
+/// 会话写不进去；而当时 `signedIn` 用 `try?` 吞掉错误，
+/// **并且只在「不记住」分支登记服务器地址**——结果地址和 token 都没留下，
+/// 每次启动都是全新的登录页。
+@Suite("SessionBootstrapper 持久化")
+@MainActor
+struct SessionBootstrapperTests {
+    // MARK: 夹具
+
+    /// 永远失败的存储：模拟「钥匙串缺 entitlement」。
+    private final class FailingSecureStore: SecureStoring, @unchecked Sendable {
+        func save(_ data: Data, account: String, service: String) throws {
+            throw SessionStoreError.keychain(status: -34018, operation: .add)
+        }
+
+        func load(account: String, service: String) throws -> Data? { nil }
+
+        func delete(account: String, service: String) throws {}
+
+        func deleteAll(service: String) throws {}
+    }
+
+    /// 在**非隔离**上下文里造一个服务器注册表。
+    ///
+    /// `UserDefaults` 不是 `Sendable`，而本套件是 `@MainActor`（`SessionBootstrapper`
+    /// 就在主线程上）。直接把主线程创建的实例交给 `ServerRegistry` actor 会被
+    /// 严格并发拦下，因此这里用 `nonisolated` 工厂在调用方隔离域之外创建。
+    private nonisolated static func makeRegistry(suiteName: String) throws -> ServerRegistry {
+        ServerRegistry(defaults: try #require(UserDefaults(suiteName: suiteName)))
+    }
+
+    private func makeFixture(failing: Bool) throws -> (SessionBootstrapper, ServerRegistry, String) {
+        let suiteName = "test.prism.bootstrap.\(UUID().uuidString)"
+        let registry = try Self.makeRegistry(suiteName: suiteName)
+        let secure: any SecureStoring = failing ? FailingSecureStore() : InMemorySecureStore()
+        let store = SessionStore(secureStore: secure)
+        return (SessionBootstrapper(store: store, registry: registry), registry, suiteName)
+    }
+
+    private func makeServer() throws -> ServerConnection {
+        ServerConnection(
+            id: "srv-media",
+            name: "media.micu.hk",
+            baseURL: try #require(URL(string: "https://media.micu.hk"))
+        )
+    }
+
+    private func makeAuthSession(serverId: String = "srv-media") -> AuthSession {
+        AuthSession(
+            serverId: serverId,
+            userId: "user-1",
+            accessToken: "token-abc",
+            user: EmbyUser(id: "user-1", name: "小林", serverId: serverId)
+        )
+    }
+
+    // MARK: 关键回归
+
+    @Test("即使会话写不进钥匙串，服务器地址也必须留下")
+    func serverIsRegisteredEvenWhenPersistenceFails() async throws {
+        let (bootstrapper, registry, suite) = try makeFixture(failing: true)
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let server = try makeServer()
+
+        await bootstrapper.signedIn(server: server, auth: makeAuthSession(), persist: true)
+
+        // 地址必须还在：这是「下次不用重打地址」的唯一前提。
+        let saved = await registry.servers()
+        #expect(saved.count == 1)
+        #expect(saved.first?.id == "srv-media")
+        #expect(saved.first?.baseURL.absoluteString == "https://media.micu.hk")
+        #expect(await registry.lastActiveServerId == "srv-media")
+    }
+
+    @Test("会话写不进去时，明确记录失败原因而不是静默吞掉")
+    func persistenceFailureIsReported() async throws {
+        let (bootstrapper, _, suite) = try makeFixture(failing: true)
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+
+        await bootstrapper.signedIn(server: try makeServer(), auth: makeAuthSession(), persist: true)
+
+        let message = try #require(bootstrapper.persistenceFailure)
+        #expect(message.contains("-34018"))
+        // 登录本身仍然是成功的：用户这一轮可以正常用。
+        if case .ready = bootstrapper.phase {} else {
+            Issue.record("持久化失败不该阻断本次登录")
+        }
+    }
+
+    @Test("正常存储时不留失败标记，并且重启能免登录恢复")
+    func successfulPersistenceRestoresOnNextLaunch() async throws {
+        let suite = "test.prism.bootstrap.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+
+        let secure = InMemorySecureStore()
+        let store = SessionStore(secureStore: secure)
+        let registry = try Self.makeRegistry(suiteName: suite)
+        let server = try makeServer()
+
+        let first = SessionBootstrapper(store: store, registry: registry)
+        await first.signedIn(server: server, auth: makeAuthSession(), persist: true)
+        #expect(first.persistenceFailure == nil)
+
+        // 模拟重启：同一份 Keychain 与 UserDefaults，新的引导器。
+        let second = SessionBootstrapper(store: store, registry: registry)
+        await second.restore()
+
+        guard case let .ready(session) = second.phase else {
+            Issue.record("应当免登录恢复到主界面，实际停留在 \(second.phase)")
+            return
+        }
+        #expect(session.server.id == "srv-media")
+        #expect(session.userId == "user-1")
+    }
+
+    @Test("没有会话时恢复结果是「需要连接」，不会误判为已登录")
+    func restoreWithoutSessionNeedsConnection() async throws {
+        let (bootstrapper, _, suite) = try makeFixture(failing: false)
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+
+        await bootstrapper.restore()
+
+        if case .needsConnection = bootstrapper.phase {} else {
+            Issue.record("空存储应当回到登录页")
+        }
+    }
+
+    @Test("不记住登录时：地址留下、token 不写")
+    func rememberMeFalseKeepsAddressOnly() async throws {
+        let (bootstrapper, registry, suite) = try makeFixture(failing: false)
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let server = try makeServer()
+
+        await bootstrapper.signedIn(server: server, auth: makeAuthSession(), persist: false)
+
+        // 地址留下，方便下次直接点选。
+        #expect(await registry.servers().count == 1)
+        // 但没有 token：下次必须重新输密码。
+        #expect(try await bootstrapper.store.loadAll().isEmpty)
+    }
+}
