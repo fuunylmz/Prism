@@ -58,7 +58,7 @@ public struct SessionRestoration: Sendable {
     ///   丢了不该把用户踢回登录页（真缺地址时 UI 可用 `session.serverId` 反查或提示重填）。
     ///
     /// - Returns: 恢复出的状态。
-    /// - Throws: ``SessionStoreError``（Keychain 不可读 / 数据损坏）。
+    /// - Throws: ``SessionStoreError``（本机存储不可读 / 数据损坏）。
     public func restore() async throws -> SessionState {
         let servers = await registry.servers()
 

@@ -8,7 +8,7 @@ import PrismPlayback
 ///
 /// 三条路径：
 /// 1. **演示模式**（`-DemoMode YES` / `PRISM_DEMO=1`）—— 不联网，用内置媒体库；
-/// 2. **已登录** —— 从 Keychain 恢复会话，进主界面；
+/// 2. **已登录** —— 从本机存储恢复会话，进主界面；
 /// 3. **未登录** —— 显示连接与登录页。
 public struct RootView: View {
     /// 启动引导：决定上面三条路径中的哪一条。
@@ -40,7 +40,7 @@ public struct RootView: View {
             }
         }
         .task {
-            // 演示模式不需要碰 Keychain。
+            // 演示模式不需要读本机存储。
             guard !DemoMode.isEnabled else { return }
             await bootstrapper.restore()
         }

@@ -10,18 +10,18 @@ import SwiftUI
 /// 决定 App 启动后该显示什么：登录页、还是主界面。
 ///
 /// 职责：
-/// 1. **启动恢复**：从 Keychain 读回上次的会话，免登录进入主界面；
+/// 1. **启动恢复**：从本机存储读回上次的会话，免登录进入主界面；
 /// 2. **登录**：`ConnectView` 完成后把会话交进来，持久化并切到主界面；
 /// 3. **登出**：清 token、保留服务器记录，退回登录页。
 ///
-/// 为什么单独一个类型：`RootView` 是 SwiftUI 视图，不适合放异步的 Keychain 与网络逻辑；
+/// 为什么单独一个类型：`RootView` 是 SwiftUI 视图，不适合放异步的磁盘读写与网络逻辑；
 /// 而且这些状态要在整个 App 生命周期内保持（视图重建不该丢失登录态）。
 @MainActor
 @Observable
 public final class SessionBootstrapper {
     /// 当前阶段。
     public enum Phase: Sendable {
-        /// 还在读 Keychain（启动瞬间）。
+        /// 还在读本机存储（启动瞬间）。
         case restoring
         /// 没有可用会话，需要登录。
         case needsConnection
@@ -42,13 +42,13 @@ public final class SessionBootstrapper {
     /// 创建引导器。
     ///
     /// - Parameters:
-    ///   - store: 会话存储；默认用真实 Keychain。
+    ///   - store: 会话存储；默认写到应用容器内的文件。
     ///   - registry: 服务器列表；默认用 `UserDefaults`。
     public init(
         store: SessionStore? = nil,
         registry: ServerRegistry? = nil
     ) {
-        let resolvedStore = store ?? SessionStore(secureStore: KeychainSecureStore())
+        let resolvedStore = store ?? SessionStore(secureStore: FileSecureStore())
         let resolvedRegistry = registry ?? ServerRegistry()
         self.store = resolvedStore
         self.registry = resolvedRegistry
@@ -57,7 +57,7 @@ public final class SessionBootstrapper {
 
     /// 启动时调用一次。
     ///
-    /// 失败（Keychain 不可读 / 数据损坏）时退回登录页而不是崩溃——
+    /// 失败（本机存储不可读 / 数据损坏）时退回登录页而不是崩溃——
     /// 用户最多重新登录一次，不该因为一条坏记录打不开 App。
     public func restore() async {
         do {
@@ -102,7 +102,7 @@ public final class SessionBootstrapper {
         persistenceFailure = nil
 
         // 服务器地址**无论如何都要登记**：它不含敏感内容，且是「下次不用重打地址」
-        // 的前提。早期实现只在「不记住」的分支里登记，一旦 Keychain 写入失败
+        // 的前提。早期实现只在「不记住」的分支里登记，一旦本机存储写入失败
         // （沙盒 + ad-hoc 签名下必现），地址和 token 就都没留下，
         // 于是每次启动都是全新的登录页。
         await registry.upsert(server)
@@ -129,8 +129,8 @@ public final class SessionBootstrapper {
     /// - Returns: 提示文案。
     private static func message(for error: SessionStoreError) -> String {
         switch error {
-        case let .keychain(status, operation):
-            "本机存储不可用（钥匙串 \(operation.rawValue) 返回 \(status)），本次登录不会被记住。"
+        case let .file(code, operation):
+            "本机存储不可用（\(operation.rawValue) 失败，错误码 \(code)），本次登录不会被记住。"
         case let .encoding(detail):
             "会话数据编码失败：\(detail)"
         case let .decoding(detail):

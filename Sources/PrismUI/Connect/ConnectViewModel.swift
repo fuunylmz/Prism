@@ -8,7 +8,7 @@ import PrismData
 
 /// 连接与登录的视图模型。
 ///
-/// 只做「状态 + 网络调用」，不碰 Keychain——持久化由上层（`SessionBootstrapper`）统一做。
+/// 只做「状态 + 网络调用」，不碰磁盘——持久化由上层（`SessionBootstrapper`）统一做。
 @MainActor
 @Observable
 public final class ConnectViewModel {
@@ -48,7 +48,7 @@ public final class ConnectViewModel {
     /// 密码。
     public var password = ""
 
-    /// 是否把登录状态保存到 Keychain（下次启动免登录）。
+    /// 是否把登录状态保存到本机（下次启动免登录）。
     public var rememberMe = true
 
     /// 已选定的服务器。
@@ -185,7 +185,7 @@ public final class ConnectViewModel {
 
     /// 上层完成会话持久化后调用，解除 ``Step/connecting``。
     ///
-    /// 失败（例如 Keychain 写不进去）也调用它——用户这一轮已经登录成功，
+    /// 失败（例如磁盘写不进去）也调用它——用户这一轮已经登录成功，
     /// 不该卡在「正在连接」。
     public func finishConnecting() {
         isBusy = false

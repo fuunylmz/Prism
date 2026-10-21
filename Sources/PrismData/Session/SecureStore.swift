@@ -1,49 +1,27 @@
 import Foundation
-import Security
 
 // MARK: - 错误
-
-/// Keychain 操作的种类，仅用于把失败状态码映射回「是哪一步炸的」。
-public enum KeychainOperation: String, Sendable, Hashable {
-    /// `SecItemAdd`
-    case add
-    /// `SecItemUpdate`
-    case update
-    /// `SecItemCopyMatching`
-    case copy
-    /// `SecItemDelete`
-    case delete
-}
 
 /// 会话持久化层的错误。
 ///
 /// **为什么不复用 `EmbyError`**
 ///
 /// 1. 语义不同：``EmbyError`` 的每个 case 都对应一种「与服务器交互」的结果
-///    （401 / 超时 / 解码失败…），UI 会把它翻译成「服务器连不上」。而 Keychain 失败是
-///    **本机存储故障**，既不该提示用户去检查网络，也不该触发登出。
-/// 2. 判定会被污染：`EmbyError.requiresSignOut` 只看 `.unauthorized`，把钥匙串错误塞进
-///    `.unknown` 虽然不会误触发登出，但反过来——如果哪天有人为了「省事」把 -25300 映射成
-///    `.notFound`——就会走进完全错误的处理分支。
-/// 3. `OSStatus` 是排障的唯一线索：`-25300`（没找到）、`-25299`（已存在）、
-///    `-34018`（缺 entitlement）、`-25308`（需要用户交互）在真机上是完全不同的处置方式，
+///    （401 / 超时 / 解码失败…），UI 会把它翻译成「服务器连不上」。而本地存储失败是
+///    **本机故障**，既不该提示用户去检查网络，也不该触发登出。
+/// 2. 判定会被污染：`EmbyError.requiresSignOut` 只看 `.unauthorized`，把存储错误塞进
+///    `.unknown` 虽然不会误触发登出，但反过来——如果哪天有人为了「省事」把「文件不存在」
+///    映射成 `.notFound`——就会走进完全错误的处理分支。
+/// 3. 文件系统错误码是排障的唯一线索：`NSFileWriteNoPermissionError`（没权限）、
+///    `NSFileNoSuchFileError`（目录被删）、磁盘满，在真机上是完全不同的处置方式，
 ///    而 `EmbyError.unknown(String)` 会把数字丢掉。
-///
-/// 因此这里单独立一个错误类型，并保留原始 `OSStatus`。
-///
-/// 状态码取值已对照本机 SDK 头文件核实
-/// （`MacOSX.sdk/System/Library/Frameworks/Security.framework/Headers/SecBase.h`）：
-/// `errSecDuplicateItem = -25299`、`errSecItemNotFound = -25300`、
-/// `errSecInteractionNotAllowed = -25308`、`errSecMissingEntitlement = -34018`。
-/// 官方语义：<https://developer.apple.com/documentation/security/errsecduplicateitem>、
-/// <https://developer.apple.com/documentation/security/errsecitemnotfound>。
 public enum SessionStoreError: Error, Sendable, Equatable, Hashable {
-    /// Keychain 返回了非预期状态码。
+    /// 文件读写失败。
     ///
     /// - Parameters:
-    ///   - status: 原始 `OSStatus`（负数）。
-    ///   - operation: 出错的 API。
-    case keychain(status: OSStatus, operation: KeychainOperation)
+    ///   - code: 原始 `NSError.code`（`CocoaError` 域）。
+    ///   - operation: 出错的步骤。
+    case file(code: Int, operation: FileOperation)
 
     /// 序列化失败（`JSONEncoder` 抛错，正常不会发生，兜底保留）。
     case encoding(String)
@@ -58,6 +36,16 @@ public enum SessionStoreError: Error, Sendable, Equatable, Hashable {
     case sessionNotFound(serverId: String, userId: String)
 }
 
+/// 文件操作的种类，把失败定位到具体一步。
+public enum FileOperation: String, Sendable, Hashable {
+    /// 读文件。
+    case read
+    /// 写文件。
+    case write
+    /// 删文件。
+    case delete
+}
+
 extension SessionStoreError {
     /// 面向用户的本地化文案。
     ///
@@ -65,11 +53,11 @@ extension SessionStoreError {
     /// 待 `.xcstrings` 落地后直接建条目即可，调用点无需改动。
     public var userMessage: LocalizedStringResource {
         switch self {
-        case .keychain:
+        case .file:
             LocalizedStringResource(
-                "error.sessionStore.keychain",
-                defaultValue: "无法安全地保存登录信息，请检查钥匙串是否已锁定。",
-                comment: "EN: Unable to store sign-in information securely. Check that the keychain is unlocked."
+                "error.sessionStore.file",
+                defaultValue: "无法保存登录信息到本机，请检查磁盘空间。",
+                comment: "EN: Unable to save sign-in information locally. Check disk space."
             )
         case .encoding, .decoding:
             LocalizedStringResource(
@@ -94,31 +82,31 @@ extension SessionStoreError {
 
     /// 是否值得让用户重试。
     ///
-    /// 只有「钥匙串被锁 / 需要交互」这类状态是暂时的；数据损坏必须重新登录才能修复。
+    /// 只有「临时性 IO 失败」可重试；数据损坏必须重新登录才能修复。
     public var isRecoverable: Bool {
         switch self {
-        case let .keychain(status, _):
-            return status == errSecInteractionNotAllowed || status == errSecNotAvailable
+        case let .file(_, operation):
+            // 写入 / 删除失败通常是暂时性的（磁盘忙、目录刚被重建），
+            // 读取失败多半意味着文件损坏，重试也没用。
+            return operation != .read
         case .encoding, .decoding, .invalidValue, .sessionNotFound:
             return false
         }
     }
 
-    /// 原始状态码（非 Keychain 错误为 `nil`），供日志使用。
-    public var statusCode: OSStatus? {
-        if case let .keychain(status, _) = self { return status }
+    /// 原始错误码（非文件错误为 `nil`），供日志使用。
+    public var statusCode: Int? {
+        if case let .file(code, _) = self { return code }
         return nil
     }
 }
 
 // MARK: - 协议
 
-/// 安全存储抽象：把「字节 + 账号 + 服务名」三元组放进系统钥匙串。
+/// 本地存储抽象：把「字节 + 账号 + 服务名」三元组持久化到本机。
 ///
-/// 抽成协议的唯一目的是**让单测完全不碰真实 Keychain**。
-/// 真实 Keychain 在开发机上会弹出授权对话框（尤其是 ad-hoc 签名每次重建都会让
-/// 旧条目的 ACL 失配），这是本项目明令禁止在测试里触发的事故模式。
-/// 因此生产代码只依赖本协议，单测注入 ``InMemorySecureStore``。
+/// 抽成协议的目的是**让单测完全不碰真实磁盘**：生产环境写文件，
+/// 单测注入 ``InMemorySecureStore``，测试之间互不影响，也不会污染用户的登录态。
 ///
 /// 语义约定（实现方必须遵守）：
 /// - `load` 找不到条目时返回 `nil`，**不是错误**。
@@ -129,8 +117,8 @@ public protocol SecureStoring: Sendable {
     ///
     /// - Parameters:
     ///   - data: 待写入的字节。
-    ///   - account: 条目账号（`kSecAttrAccount`）。
-    ///   - service: 条目服务名（`kSecAttrService`）。
+    ///   - account: 条目账号。
+    ///   - service: 条目服务名。
     /// - Throws: ``SessionStoreError``。
     func save(_ data: Data, account: String, service: String) throws
 
@@ -158,240 +146,183 @@ public protocol SecureStoring: Sendable {
     func deleteAll(service: String) throws
 }
 
-// MARK: - 真实实现
+// MARK: - 文件实现
 
-/// Keychain 的可访问性等级。
+/// 把条目存成 JSON 文件的生产实现。
 ///
-/// 只暴露本项目真正需要的两档，避免把 `kSecAttrAccessible*` 的十来个常量泄漏到业务层。
+/// ## 为什么不用钥匙串
 ///
-/// **为什么不是 `WhenUnlocked`**：`WhenUnlocked` 在设备锁屏后条目不可读，
-/// 后台任务（进度补报、下载续传）会静默失败；Apple 明确建议需要后台访问的条目用
-/// `AfterFirstUnlock`：<https://developer.apple.com/documentation/security/ksecattraccessibleafterfirstunlock>
-/// （"This is recommended for items that need to be accessed by background applications."）。
+/// 早期版本把登录 token 放进 macOS 钥匙串（`SecItem`）。在**沙盒 + ad-hoc 签名**
+/// （本工程当前的分发方式，见 `docs/BUILD_ENV.md`）下，数据保护钥匙串需要
+/// provisioning profile 授权 `keychain-access-groups`，否则 `SecItemAdd` 返回
+/// `errSecMissingEntitlement`(-34018)；回退到文件型钥匙串又受沙盒限制，且首次
+/// 读取会弹「Prism 想要访问钥匙串中的机密信息」授权框。结果是**登录状态永远存不下来、
+/// 每次打开都要重新登录**，而用户看到的是一连串系统弹窗。
 ///
-/// **为什么默认带 `ThisDeviceOnly`**：`docs/research/macos-engineering.md` §5.3 规定
-/// token 不随 iCloud 钥匙串同步、不随备份迁移到新设备（token 是设备绑定的，
-/// 跨设备同步只增加泄露面）。若将来确实需要「换机后免登录」，把构造参数改成
-/// ``afterFirstUnlock`` 即可。
-public enum KeychainAccessibility: Sendable, Hashable {
-    /// 首次解锁后可读，随加密备份迁移。
-    case afterFirstUnlock
-    /// 首次解锁后可读，**不**迁移、**不**同步（默认）。
-    case afterFirstUnlockThisDeviceOnly
-
-    /// 对应的 `kSecAttrAccessible*` 常量。
-    var constant: CFString {
-        switch self {
-        case .afterFirstUnlock:
-            return kSecAttrAccessibleAfterFirstUnlock
-        case .afterFirstUnlockThisDeviceOnly:
-            return kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        }
-    }
-}
-
-/// 使用哪一种 macOS 钥匙串实现。
+/// 因此改为直接写应用自己的容器目录：无弹窗、无 entitlement 依赖、行为完全确定。
 ///
-/// macOS 有**两套**钥匙串实现，`SecItem` API 都能访问（
-/// <https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains>）：
+/// ## 安全边界（明确说明，不拔高）
 ///
-/// | 实现 | 访问控制 | 是否需要 entitlement | 默认 |
-/// |---|---|---|---|
-/// | 文件型（`login.keychain-db`） | ACL（`SecAccess`） | 否 | 是（`SecItem` 的默认目标） |
-/// | 数据保护型（DP，iOS 同款） | Keychain access group | **是** | 需显式打开 |
+/// - **不保存密码**。存的是 Emby 的 access token（免登录凭据），有效期由服务器控制，
+///   用户改密码或在服务器端吊销后立即失效。
+/// - 文件位于 app 容器内（`~/Library/Containers/<bundle id>/Data/Library/Application Support/`），
+///   沙盒保证其它 App 读不到；同一台机器上拥有你用户账号的进程理论上可读。
+/// - 因此定位是「本机便利性优先」。若将来需要在共用电脑上更强隔离，
+///   可以改回钥匙串（需 Developer ID + provisioning profile），或干脆不提供「记住我」。
 ///
-/// Apple 推荐用 DP 钥匙串（跨平台语义一致、支持 iCloud 钥匙串、访问控制模型更清晰），
-/// 打开方式是查询字典里加 `kSecUseDataProtectionKeychain: true`：
-/// <https://developer.apple.com/documentation/security/ksecusedataprotectionkeychain>
-/// （"It's highly recommended that you set the value of this key to true for all keychain operations."）。
+/// ## 存储形态
 ///
-/// **但 DP 钥匙串的 access group 来自代码签名 entitlement**（`application-identifier`
-/// 或 `keychain-access-groups`，且必须由 provisioning profile 授权）。本工程当前是
-/// **ad-hoc 签名**（`docs/BUILD_ENV.md` §6：本机 0 个有效签名身份，只能用 `-`），
-/// 既没有 team id 也没有内嵌 profile，此时 DP 钥匙串会返回
-/// `errSecMissingEntitlement`（-34018）。这是社区反复踩到的事实：
-/// <https://developer.apple.com/forums/thread/114456>
-/// （"If you're using the traditional file-based keychain, you should never see error -34018."）。
-///
-/// 因此默认用 ``automatic``：先按 Apple 推荐走 DP，一旦拿到 -34018 / -50（参数不支持）
-/// 就**自动降级**到文件型钥匙串，并在本进程内记住结果。等 M5 接上 Developer ID +
-/// provisioning profile 后，DP 路径会自动生效，不需要改业务代码。
-public enum KeychainKind: Sendable, Hashable {
-    /// 数据保护钥匙串（iOS 同款语义）。
-    case dataProtection
-    /// 文件型钥匙串（`login.keychain-db`）。
-    case fileBased
-    /// 先试数据保护，缺 entitlement 时降级到文件型（默认）。
-    case automatic
-}
-
-/// 基于 `Security.framework` 的真实实现。
-///
-/// 线程安全：所有方法都可以从任意线程/actor 调用；内部只用一个锁保护「已解析的钥匙串实现」
-/// 这一小块可变状态，Keychain 调用本身**不持锁**（避免串行化慢操作）。
-public final class KeychainSecureStore: SecureStoring, @unchecked Sendable {
-    /// 首选实现。
-    private let preferredKind: KeychainKind
-    /// 条目的可访问性（仅在数据保护钥匙串下生效，见下）。
-    private let accessibility: KeychainAccessibility
-    /// 保护 ``resolvedKindStorage`` 的锁。
+/// `Application Support/Prism/Session/<service>/<account>.json`，一个条目一个文件。
+/// 用文件而不是一个大 JSON：切换服务器、删除某一台时不需要重写全部数据，
+/// 也避免「写一半崩了导致所有会话丢失」。
+public final class FileSecureStore: SecureStoring, @unchecked Sendable {
     private let lock = NSLock()
-    /// 首次成功调用后确定的实现；`nil` 表示还没解析过。
-    private var resolvedKindStorage: KeychainKind?
+    private let rootDirectory: URL
 
-    /// 探测用的 service 名（只在自动模式解析实现时写一条随即删除的条目）。
-    private static let probeService = "app.prism.Prism.availability-probe"
-
-    /// 数据保护钥匙串可用性的探测实现。
+    /// 创建文件存储。
     ///
-    /// 默认 `nil` 表示走真实的 `SecItemAdd` 探测（`resolvesToDataProtection`）。
-    /// 之所以留这个接缝：这段「先探测再锁定」的逻辑正是「每次打开都要重新输入服务器」
-    /// 那条故障的修复点，必须能被单测直接覆盖——而真实钥匙串在测试里绝不能碰
-    /// （见本文件末尾的说明）。
-    private let dataProtectionProbe: (@Sendable () -> Bool)?
+    /// - Parameter rootDirectory: 数据根目录；默认在应用支持目录下建 `Prism/Session`。
+    ///   测试可传临时目录，避免污染真实数据。
+    public init(rootDirectory: URL? = nil) {
+        self.rootDirectory = rootDirectory ?? Self.defaultRootDirectory()
+    }
 
-    /// 创建实例。
+    /// 默认根目录：`Application Support/Prism/Session`。
+    ///
+    /// - Returns: 根目录 URL。取不到应用支持目录时退回临时目录（仍可用，只是重启后丢失）。
+    private static func defaultRootDirectory() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        return base
+            .appendingPathComponent("Prism", isDirectory: true)
+            .appendingPathComponent("Session", isDirectory: true)
+    }
+
+    // MARK: SecureStoring
+
+    /// 写入或覆盖一条数据（原子写）。
     ///
     /// - Parameters:
-    ///   - kind: 钥匙串实现，默认 ``KeychainKind/automatic``。
-    ///   - accessibility: 可访问性等级，默认 ``KeychainAccessibility/afterFirstUnlockThisDeviceOnly``。
-    ///
-    /// - Note: `kSecAttrAccessible` 在 macOS 上**只有在数据保护钥匙串下才生效**，
-    ///   官方原文："You can use this attribute for macOS keychain items only if you also set
-    ///   a value of `true` for the `kSecUseDataProtectionKeychain` key"
-    ///   —— <https://developer.apple.com/documentation/security/ksecattraccessible>。
-    ///   所以文件型钥匙串分支里刻意**不带**这个属性：带上会被当成不匹配的查询条件，
-    ///   导致「刚写进去却读不出来」。
-    /// - Parameter dataProtectionProbe: 数据保护钥匙串可用性探测；默认 `nil`
-    ///   表示用真实的 `SecItemAdd` 探测。仅供测试注入，业务代码不要传。
-    public init(
-        kind: KeychainKind = .automatic,
-        accessibility: KeychainAccessibility = .afterFirstUnlockThisDeviceOnly,
-        dataProtectionProbe: (@Sendable () -> Bool)? = nil
-    ) {
-        self.preferredKind = kind
-        self.accessibility = accessibility
-        self.dataProtectionProbe = dataProtectionProbe
-    }
-
-    /// 实际生效的钥匙串实现；尚未发生任何调用时为 `nil`。
-    public var resolvedKind: KeychainKind? {
-        lock.lock()
-        defer { lock.unlock() }
-        return resolvedKindStorage
-    }
-
-    /// 写入或覆盖一条数据。
-    ///
-    /// 冲突处理：`SecItemAdd` 撞到已存在条目时返回 `errSecDuplicateItem`（-25299），
-    /// 官方说明它按「主键」判重（generic password 的主键是
-    /// `kSecAttrAccount` + `kSecAttrService`）：
-    /// <https://developer.apple.com/documentation/security/errsecduplicateitem>。
-    ///
-    /// 这里的处置顺序是 **add → update →（条目在两次调用之间消失时）add**：
-    /// 相比「先 delete 再 add」，update 是原子的，不会出现「删掉了但加不回去」的丢数据窗口，
-    /// 也保留了条目原有的 ACL / 可访问性。删除只是最后的兜底路径，不会静默丢数据。
+    ///   - data: 待写入的字节。
+    ///   - account: 条目账号。
+    ///   - service: 条目服务名。
+    /// - Throws: ``SessionStoreError``。
     public func save(_ data: Data, account: String, service: String) throws {
         try Self.validate(account: account, service: service)
 
-        try perform { kind in
-            var addQuery = self.baseQuery(account: account, service: service, kind: kind)
-            addQuery[kSecValueData as String] = data
-            if kind == .dataProtection {
-                addQuery[kSecAttrAccessible as String] = self.accessibility.constant
-            }
+        lock.lock()
+        defer { lock.unlock() }
 
-            var status = SecItemAdd(addQuery as CFDictionary, nil)
-            if status == errSecDuplicateItem {
-                let matchQuery = self.baseQuery(account: account, service: service, kind: kind)
-                var attributes: [String: Any] = [kSecValueData as String: data]
-                if kind == .dataProtection {
-                    attributes[kSecAttrAccessible as String] = self.accessibility.constant
-                }
-                status = SecItemUpdate(matchQuery as CFDictionary, attributes as CFDictionary)
-                if status == errSecItemNotFound {
-                    // 极小概率：条目在 add 与 update 之间被别的进程删了。补一次 add。
-                    status = SecItemAdd(addQuery as CFDictionary, nil)
-                }
-            }
-
-            guard status == errSecSuccess else {
-                throw SessionStoreError.keychain(status: status, operation: .add)
-            }
+        do {
+            try FileManager.default.createDirectory(
+                at: directory(for: service),
+                withIntermediateDirectories: true
+            )
+            // `.atomic`：先写临时文件再改名，避免「写一半断电」留下半个 JSON。
+            try data.write(to: fileURL(account: account, service: service), options: .atomic)
+        } catch {
+            throw Self.storeError(error, operation: .write)
         }
     }
 
-    /// 读取一条数据；条目不存在返回 `nil`。
+    /// 读取一条数据；文件不存在返回 `nil`。
     ///
-    /// `errSecItemNotFound`（-25300）是「没找到」而不是失败，
-    /// 见 <https://developer.apple.com/documentation/security/errsecitemnotfound>。
+    /// - Parameters:
+    ///   - account: 条目账号。
+    ///   - service: 条目服务名。
+    /// - Returns: 已保存的字节；不存在时为 `nil`。
+    /// - Throws: ``SessionStoreError``。
     public func load(account: String, service: String) throws -> Data? {
         try Self.validate(account: account, service: service)
 
-        return try perform { kind in
-            var query = self.baseQuery(account: account, service: service, kind: kind)
-            query[kSecReturnData as String] = true
-            query[kSecMatchLimit as String] = kSecMatchLimitOne
+        lock.lock()
+        defer { lock.unlock() }
 
-            var item: CFTypeRef?
-            let status = SecItemCopyMatching(query as CFDictionary, &item)
-            switch status {
-            case errSecSuccess:
-                guard let data = item as? Data else {
-                    throw SessionStoreError.decoding("Keychain 返回的条目不是 Data")
-                }
-                return data
-            case errSecItemNotFound:
-                return nil
-            default:
-                throw SessionStoreError.keychain(status: status, operation: .copy)
-            }
+        let url = fileURL(account: account, service: service)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        do {
+            return try Data(contentsOf: url)
+        } catch {
+            throw Self.storeError(error, operation: .read)
         }
     }
 
     /// 删除一条数据（幂等）。
+    ///
+    /// - Parameters:
+    ///   - account: 条目账号。
+    ///   - service: 条目服务名。
+    /// - Throws: ``SessionStoreError``。
     public func delete(account: String, service: String) throws {
         try Self.validate(account: account, service: service)
 
-        try perform { kind in
-            let query = self.baseQuery(account: account, service: service, kind: kind)
-            let status = SecItemDelete(query as CFDictionary)
-            switch status {
-            case errSecSuccess, errSecItemNotFound:
-                return
-            default:
-                throw SessionStoreError.keychain(status: status, operation: .delete)
-            }
+        lock.lock()
+        defer { lock.unlock() }
+
+        let url = fileURL(account: account, service: service)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            throw Self.storeError(error, operation: .delete)
         }
     }
 
     /// 删除某个 service 下的全部条目。
+    ///
+    /// - Parameter service: 条目服务名。
+    /// - Throws: ``SessionStoreError``。
     public func deleteAll(service: String) throws {
         guard !service.isEmpty else {
             throw SessionStoreError.invalidValue("service 不能为空")
         }
 
-        try perform { kind in
-            var query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service
-            ]
-            if kind == .dataProtection {
-                query[kSecUseDataProtectionKeychain as String] = true
-            }
-            let status = SecItemDelete(query as CFDictionary)
-            switch status {
-            case errSecSuccess, errSecItemNotFound:
-                return
-            default:
-                throw SessionStoreError.keychain(status: status, operation: .delete)
-            }
+        lock.lock()
+        defer { lock.unlock() }
+
+        let directory = directory(for: service)
+        guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: directory)
+        } catch {
+            throw Self.storeError(error, operation: .delete)
         }
+    }
+
+    // MARK: 路径
+
+    /// 某个 service 对应的目录。
+    ///
+    /// - Parameter service: 条目服务名。
+    /// - Returns: 目录 URL。
+    private func directory(for service: String) -> URL {
+        rootDirectory.appendingPathComponent(Self.sanitize(service), isDirectory: true)
+    }
+
+    /// 某个条目的文件路径。
+    ///
+    /// - Parameters:
+    ///   - account: 条目账号。
+    ///   - service: 条目服务名。
+    /// - Returns: 文件 URL。
+    private func fileURL(account: String, service: String) -> URL {
+        directory(for: service)
+            .appendingPathComponent(Self.sanitize(account), isDirectory: false)
+            .appendingPathExtension("json")
+    }
+
+    /// 把名字里可能构成路径的字符换掉，避免写到目录之外。
+    ///
+    /// - Parameter name: 原始名字。
+    /// - Returns: 可安全用作文件名的字符串。
+    private static func sanitize(_ name: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._"))
+        return String(name.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
     }
 
     // MARK: 内部
 
-    /// 参数校验：空账号/空服务名会让查询退化成「匹配一大片条目」，必须拦住。
+    /// 参数校验：空账号/空服务名会产生非法路径，必须拦住。
     private static func validate(account: String, service: String) throws {
         guard !account.isEmpty else {
             throw SessionStoreError.invalidValue("account 不能为空")
@@ -401,104 +332,22 @@ public final class KeychainSecureStore: SecureStoring, @unchecked Sendable {
         }
     }
 
-    /// 构造通用密码条目的基础查询字典。
-    private func baseQuery(account: String, service: String, kind: KeychainKind) -> [String: Any] {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-        if kind == .dataProtection {
-            query[kSecUseDataProtectionKeychain as String] = true
-        }
-        return query
-    }
-
-    /// 按已解析（或待解析）的钥匙串实现执行一次操作，必要时自动降级。
+    /// 把任意 `Error` 归一化成 ``SessionStoreError``。
     ///
-    /// 降级条件只认「缺 entitlement」这一类：`errSecMissingEntitlement`（-34018）与
-    /// `errSecParam`（-50，文件型钥匙串不支持某个属性时的表现）。其它错误原样抛出，
-    /// 免得把「用户取消了授权」误判成「环境不支持」而悄悄换库。
-    private func perform<T>(_ operation: (KeychainKind) throws -> T) throws -> T {
-        if let resolved = resolvedKind {
-            return try operation(resolved)
-        }
-
-        switch preferredKind {
-        case .dataProtection, .fileBased:
-            lock.lock()
-            resolvedKindStorage = preferredKind
-            lock.unlock()
-            return try operation(preferredKind)
-
-        case .automatic:
-            // 写入探测决定用哪个实现：空库上的 `load` 返回 notFound，
-            // 不能据此认为数据保护钥匙串可用（详见 `resolvesToDataProtection`）。
-            let kind: KeychainKind = resolvesToDataProtection() ? .dataProtection : .fileBased
-            do {
-                let result = try operation(kind)
-                lock.lock()
-                resolvedKindStorage = kind
-                lock.unlock()
-                return result
-            } catch let error as SessionStoreError where Self.isUnsupportedInThisEnvironment(error) {
-                lock.lock()
-                resolvedKindStorage = .fileBased
-                lock.unlock()
-                return try operation(.fileBased)
-            }
-        }
-    }
-
-    /// 「探测」某个实现是否真的可用，但**不锁定**解析结果。
-    ///
-    /// 为什么需要它：`automatic` 的回退只认「操作抛出了 -34018 / -25308」。
-    /// 但读取一个**空**钥匙串时，数据保护实现返回的是 `errSecItemNotFound`
-    /// （-25300）——这在 `load` 里是「正常，没有条目」，于是 `perform` 把它
-    /// 当成成功，把 `resolvedKind` 锁死成 `.dataProtection`。
-    ///
-    /// 结果：登录时第一次 `load`（空库）锁定 dataProtection，随后真正的 `add`
-    /// 返回 -34018，**回退再也不会触发**，会话永远写不进去。
-    /// 在沙盒 + ad-hoc 签名（无 provisioning profile）下这是必现的，
-    /// 表现为「每次打开都要重新输入服务器」。
-    ///
-    /// 修法：自动模式下先做一次**写入探测**（写一条临时条目再删掉），
-    /// 只有真的能写才锁定 `.dataProtection`；否则直接落到 `.fileBased`。
-    private func resolvesToDataProtection() -> Bool {
-        if let dataProtectionProbe {
-            return dataProtectionProbe()
-        }
-
-        let probeAccount = "__prism_probe__"
-        var query = baseQuery(account: probeAccount, service: Self.probeService, kind: .dataProtection)
-        query[kSecValueData as String] = Data([0x00])
-
-        let addStatus = SecItemAdd(query as CFDictionary, nil)
-        switch addStatus {
-        case errSecSuccess, errSecDuplicateItem:
-            // 探测条目清理掉，不留痕迹。
-            let deleteQuery = baseQuery(account: probeAccount, service: Self.probeService, kind: .dataProtection)
-            SecItemDelete(deleteQuery as CFDictionary)
-            return true
-        default:
-            return false
-        }
-    }
-
-    /// 判断错误是否属于「当前签名环境下根本用不了数据保护钥匙串」。
-    private static func isUnsupportedInThisEnvironment(_ error: SessionStoreError) -> Bool {
-        guard let status = error.statusCode else { return false }
-        return status == errSecMissingEntitlement || status == errSecParam
+    /// - Parameters:
+    ///   - error: 原始错误。
+    ///   - operation: 出错的步骤。
+    /// - Returns: 归一化后的错误。
+    private static func storeError(_ error: any Error, operation: FileOperation) -> SessionStoreError {
+        .file(code: (error as NSError).code, operation: operation)
     }
 }
 
-// MARK: - 测试实现
+// MARK: - 测试 / 预览实现
 
 /// 纯内存实现，供单元测试与预览使用。
 ///
-/// **单测绝不能碰真实 Keychain**：开发机上 ad-hoc 签名每次重建都会变，旧条目的 ACL
-/// 不再信任新二进制，读取时会弹「Prism 想要访问钥匙串中的机密信息」对话框。
-/// 本项目已经因为钥匙串弹窗出过三次事故，所以测试一律注入本类型。
+/// 单测绝不碰真实磁盘：测试之间要互不影响，也不能污染用户的登录态。
 public final class InMemorySecureStore: SecureStoring, @unchecked Sendable {
     /// `(service, account)` → 字节。
     private struct Slot: Hashable {
@@ -560,7 +409,7 @@ public final class InMemorySecureStore: SecureStoring, @unchecked Sendable {
         storage = storage.filter { $0.key.service != service }
     }
 
-    /// 参数校验，与 ``KeychainSecureStore`` 保持一致。
+    /// 参数校验，与 ``FileSecureStore`` 保持一致。
     private func validate(account: String, service: String) throws {
         guard !account.isEmpty else {
             throw SessionStoreError.invalidValue("account 不能为空")

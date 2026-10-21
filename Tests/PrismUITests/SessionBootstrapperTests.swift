@@ -19,7 +19,7 @@ struct SessionBootstrapperTests {
     /// 永远失败的存储：模拟「钥匙串缺 entitlement」。
     private final class FailingSecureStore: SecureStoring, @unchecked Sendable {
         func save(_ data: Data, account: String, service: String) throws {
-            throw SessionStoreError.keychain(status: -34018, operation: .add)
+            throw SessionStoreError.file(code: 513, operation: .write)
         }
 
         func load(account: String, service: String) throws -> Data? { nil }
@@ -89,7 +89,7 @@ struct SessionBootstrapperTests {
         await bootstrapper.signedIn(server: try makeServer(), auth: makeAuthSession(), persist: true)
 
         let message = try #require(bootstrapper.persistenceFailure)
-        #expect(message.contains("-34018"))
+        #expect(message.contains("513"))
         // 登录本身仍然是成功的：用户这一轮可以正常用。
         if case .ready = bootstrapper.phase {} else {
             Issue.record("持久化失败不该阻断本次登录")

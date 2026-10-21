@@ -356,10 +356,10 @@ struct SessionStoreTests {
 
     @Test("底层 Keychain 报错会原样冒泡，不被吞掉")
     func secureStoreFailurePropagates() async throws {
-        let failing = FailingSecureStore(error: .keychain(status: -25308, operation: .copy))
+        let failing = FailingSecureStore(error: .file(code: 513, operation: .read))
         let store = SessionStore(secureStore: failing)
 
-        await #expect(throws: SessionStoreError.keychain(status: -25308, operation: .copy)) {
+        await #expect(throws: SessionStoreError.file(code: 513, operation: .read)) {
             _ = try await store.loadAll()
         }
     }

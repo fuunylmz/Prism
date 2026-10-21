@@ -3,29 +3,23 @@ import PrismCore
 
 // MARK: - 存储格式
 
-/// 会话在 Keychain 里的完整载荷（一个 JSON blob）。
+/// 会话存储的完整载荷（一个 JSON 文件）。
 ///
-/// **为什么把「所有会话 + active 标记」放进一条 item，而不是每个字段一条 item**
+/// **为什么把所有会话 + active 标记放进一个文件**
 ///
-/// 1. **原子性**：Keychain 没有事务。若按「一个服务器一条 item」存，`save` + `setActive`
-///    是两次独立的 `SecItemAdd`/`SecItemUpdate`，中间崩溃就会留下「令牌存了但 active 没更新」
-///    或「新服务器写了一半」的半状态。一个 blob 只有一次写入，天然原子。
-/// 2. **读取成本**：启动时恢复登录只需要**一次** `SecItemCopyMatching`。按条存就得先用
-///    `kSecMatchLimitAll` 枚举出所有账号、再逐条取数据，N 个服务器就是 N+1 次 IPC。
-///    启动路径上的每一次钥匙串往返都是可见的冷启动开销。
-/// 3. **元数据不入属性**：`activeSessionId`、schema 版本这类结构化信息如果塞进
-///    `kSecAttrGeneric`/`kSecAttrLabel`，会变成不可版本化的属性拼装；放进 JSON 里改起来
-///    只是改结构体，不需要迁移钥匙串属性。
-/// 4. **可降级**：``SecureStoring`` 把「怎么存」隔离掉了。真到了「必须单条独立吊销」
-///    那天，换一个实现即可，`SessionStore` 的公共 API 不用动。
+/// 1. **原子性**：`save` + `setActive` 是两次独立的写。放进同一个 blob 时，
+///    它们共享一次原子写（`.atomic` 先写临时文件再改名），中间崩溃不会留下
+///    「token 存了但 active 没更新」的半状态。
+/// 2. **读取成本**：启动恢复登录只需要读一个文件，不必枚举目录再逐个读。
+/// 3. **可版本化**：`schemaVersion` 就在 JSON 里，改结构时不需要迁移外部属性。
+/// 4. **可替换**：``SecureStoring`` 把「怎么存」隔离掉了，换实现不必动 `SessionStore`。
 ///
-/// **代价（已权衡）**：所有服务器的 token 共享一条 item 的 ACL；单条 item 损坏会一起丢。
-/// 前者的实际影响是「解锁一次钥匙串即可读全部」，正是我们想要的；后者靠
-/// ``SessionStore`` 的「解码失败 → 抛 `SessionStoreError.decoding`」让上层引导重新登录，
+/// **代价（已权衡）**：单条 blob 损坏会一起丢。这靠 ``SessionStore`` 的
+/// 「解码失败 → 抛 `SessionStoreError.decoding`」让上层引导重新登录，
 /// 而不是静默返回空数组假装未登录（那会掩盖 bug）。
 ///
 /// **不存明文密码**：``AuthSession`` 只含 `AccessToken`，登录密码只在登录请求期间存在于
-/// 内存，既不进 Keychain 也不进 `UserDefaults`。
+/// 内存，不落盘。
 ///
 /// 字段名用 Swift 习惯的 lowerCamelCase 而非 Emby 的 PascalCase：这个 blob 是**本机私有
 /// 格式**，不需要和服务器 DTO 保持一致，独立命名可以避免以后跟着 Emby 改字段名而牵连迁移。
@@ -59,12 +53,12 @@ struct SessionKey: Codable, Sendable, Hashable {
 
 // MARK: - SessionStore
 
-/// 登录态持久化：把 ``AuthSession`` 放进 Keychain，支持多服务器、多用户共存。
+/// 登录态持久化：把 ``AuthSession`` 写进本机文件，支持多服务器、多用户共存。
 ///
 /// 典型用法：
 ///
 /// ```swift
-/// let store = SessionStore(secureStore: KeychainSecureStore())
+/// let store = SessionStore(secureStore: FileSecureStore())
 /// try await store.save(session)                       // 登录成功后
 /// let active = try await store.active()               // 启动时免登录恢复
 /// try await store.setActive(serverId: s, userId: u)   // 切换服务器
@@ -72,32 +66,32 @@ struct SessionKey: Codable, Sendable, Hashable {
 /// ```
 ///
 /// 设计要点：
-/// - **只有 token 进 Keychain**；服务器地址、名称、图标等非敏感信息归
-///   ``ServerRegistry`` 管（`UserDefaults`），两者刻意分开：换地址不该重登，
+/// - **会话与服务器地址分开存**：会话（含 token）归本类型，服务器地址、名称等
+///   非敏感信息归 ``ServerRegistry``（`UserDefaults`）。分开的好处是换地址不必重登，
 ///   清 token 也不该丢服务器列表。
 /// - 存取是**一个 JSON blob**，理由见 ``SessionPayload``。
 /// - `actor`：所有调用串行化，避免「读-改-写」blob 时的竞态（例如同时登录两台服务器）。
 public actor SessionStore {
-    /// 默认的 Keychain service 名，与 `docs/research/macos-engineering.md` §5.3 一致。
+    /// 默认存储命名空间（决定文件落在哪个子目录）。
     public static let defaultService = "app.prism.Prism"
 
-    /// 承载 blob 的 Keychain account 名。
+    /// 承载 blob 的账号名（决定文件名）。
     ///
-    /// 只有一条 item，所以是个固定值而不是 serverId。带 `v1` 后缀是为了将来换存储格式时
+    /// 只有一条记录，所以是个固定值而不是 serverId。带 `v1` 后缀是为了将来换存储格式时
     /// 能并存新旧两份数据（先读新、读不到再读旧，迁移完删旧），不必原地改格式。
     static let sessionsAccount = "sessions.v1"
 
     /// 底层安全存储。
     private let secureStore: any SecureStoring
-    /// Keychain service 名。
+    /// 存储命名空间。
     private let service: String
 
     /// 创建实例。
     ///
     /// - Parameters:
-    ///   - secureStore: 安全存储实现。生产环境用 ``KeychainSecureStore``，
+    ///   - secureStore: 本地存储实现。生产环境用 ``FileSecureStore``，
     ///     测试必须用 ``InMemorySecureStore``（见 ``SecureStoring`` 的说明）。
-    ///   - service: Keychain service 名，默认 ``defaultService``。
+    ///   - service: 存储命名空间，默认 ``defaultService``。
     public init(secureStore: any SecureStoring, service: String = SessionStore.defaultService) {
         self.secureStore = secureStore
         self.service = service

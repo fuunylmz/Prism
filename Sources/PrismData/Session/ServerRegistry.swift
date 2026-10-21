@@ -6,14 +6,14 @@ import PrismCore
 /// **为什么和 token 分开存**
 ///
 /// 这些信息**不含敏感内容**：服务器地址、展示名、是不是 Demo 服务器。
-/// 它们放 `UserDefaults`（独立 suite，便于测试注入）就够了，不需要进 Keychain；
-/// 而 token 只能进 Keychain（`docs/research/macos-engineering.md` §5.3）。
+/// 它们放 `UserDefaults`（独立 suite，便于测试注入）就够了，属于普通偏好；
+/// 而 token 是登录凭据，归 ``SessionStore`` 单独存放。
 /// 分开的好处：
 ///
 /// - **换地址不用重登**：同一服务器的局域网地址 / 公网地址可以随时改，token 不受影响。
 /// - **清 token 不丢服务器**：401 之后只清 ``SessionStore`` 里的会话，用户重新输密码即可，
 ///   地址还在，登录页可以直接预填。
-/// - **Keychain 条目保持最少**：只有一条会话 blob，不会因为服务器数量增长而变多。
+/// - **会话存储保持最小**：只有一份会话数据，不会因为服务器数量增长而变复杂。
 ///
 /// 存储形态是一段 JSON（`[ServerConnection]`）：
 /// ``ServerConnection`` 本身就是 `Codable`，直接复用可以避免再定义一套 DTO；

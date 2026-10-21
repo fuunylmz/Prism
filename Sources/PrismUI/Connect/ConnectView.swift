@@ -16,7 +16,7 @@ public struct ConnectView: View {
     /// 登录成功回调。
     ///
     /// 传服务器与登录结果两份数据，而不是一个 `PrismSession`——
-    /// 因为持久化（Keychain + 服务器列表）需要 `ServerConnection`，
+    /// 因为持久化（会话 + 服务器列表）需要 `ServerConnection`，
     /// 由上层统一做，界面不碰存储。
     private let onConnected: @MainActor (ServerConnection, AuthSession, Bool) async -> Void
 
