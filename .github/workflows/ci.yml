@@ -1,10 +1,8 @@
 # Prism CI
 #
-# 环境要求：**Xcode 26 或 27**。
-#   - 本地已验证：macOS 27.0 + Xcode 27.1 (27A9275) + Swift 6.4，`./scripts/build.sh` 与
-#     `./scripts/test.sh` 全绿。
-#   - CI 使用 GitHub 托管的 macOS runner（macos-latest 当前指向 macOS 26 镜像，自带 Xcode 26.x）。
-#     若某天 runner 的默认 Xcode 低于 26，`setup-xcode` 步骤会显式切换到 26.x。
+# 环境要求：Xcode 27 / Swift 6.4。
+# Xcode 26.6 的 Swift 6 并发检查会在 AetherEngine 7.44.0 的 codecpar 闭包捕获处报错。
+# GitHub 的 `xcode-27` 预览镜像提供与本地已验证环境相同的 Xcode 27 工具链。
 #
 # 注意：本仓库的 xcodebuild 需要解析**本地** SPM 包（path: .），
 # 因此不需要任何网络凭据；凭据助手已在 scripts/env.sh 里禁用，避免任何钥匙串交互。
@@ -28,18 +26,12 @@ concurrency:
 jobs:
   build-and-test:
     name: Build & Test
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Select Xcode 26.x
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          # 'latest-stable' 指向 runner 上最新的正式版 Xcode；本项目要求 >= 26。
-          xcode-version: 'latest-stable'
 
       - name: Show toolchain
         run: |
