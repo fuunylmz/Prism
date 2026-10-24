@@ -109,6 +109,10 @@ public struct MediaSource: Sendable, Codable, Hashable, Identifiable {
     public var defaultSubtitleStream: MediaStream? {
         if defaultSubtitleStreamIndex == -1 { return nil }
         let subtitles = streams(ofType: .subtitle)
+        if let defaultSubtitleStreamIndex,
+           let stream = subtitles.first(where: { $0.index == defaultSubtitleStreamIndex }) {
+            return stream
+        }
         return subtitles.first(where: \.isDefault) ?? subtitles.first
     }
 

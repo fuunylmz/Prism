@@ -5,13 +5,11 @@ import PrismCore
 ///
 /// ## 为什么图形字幕必须烧录
 ///
-/// 播放内核（AetherEngine）对图形字幕只给 `CGImage`（一张位图），
-/// 无法把它合成到视频帧上再交给 AVPlayer —— 见 `docs/ARCHITECTURE.md` §3.3
-/// （字幕由 Prism 自绘，引擎只给 cue 与样式，没有「把位图合进视频」的通道）。
-/// 因此 PGS / DVDSUB / VOBSUB 这类图形字幕只有两条路：
+/// 播放内核（AetherEngine）对图形字幕提供解码后的 `CGImage` cue，由 Prism 叠加显示。
+/// 该判定器只决定是否额外要求 Emby 把图形字幕烧进转码画面：
 ///
 /// 1. **烧录**（服务端 `Encode`）：必然触发视频转码，但画面正确；
-/// 2. **不显示**：不转码，用户看不到这条字幕。
+/// 2. **客户端叠加**：不要求字幕烧录，保留直连/直封，并显示引擎解码出的位图 cue。
 ///
 /// 文本字幕（SRT / ASS / VTT）相反：服务端以外挂方式给文本，客户端自己渲染，
 /// 完全不需要转码（代价是复杂 ASS 特效会丢失，见 §3.5 坑 3）。
@@ -48,7 +46,7 @@ public struct SubtitleBurnInDecider: Sendable, Equatable {
 
     /// 图形字幕是否烧录（对应 ``PlaybackPreferences/burnInImageSubtitles``）。
     ///
-    /// 为 `false` 时，图形字幕既不再烧录也不再转码 —— 用户等于放弃这条字幕。
+    /// 为 `false` 时，图形字幕不触发服务端烧录，由客户端叠加位图 cue。
     public let burnInImageSubtitles: Bool
 
     /// 编解码器无法识别、且服务端也没给 `IsTextSubtitleStream` 时，是否按图形字幕处理。

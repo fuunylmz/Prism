@@ -56,7 +56,7 @@ public final class PlayerViewModel {
     ///
     /// 时间轴**已经**由适配器施加了字幕延迟（§3.5 坑 4），UI 直接按
     /// `start...end` 与 ``position`` 比较即可，不需要再偏移一次。
-    /// v1.0 的字幕渲染归 T3.6；本工单只负责把 cue 收下来并保证它随位置变化而刷新。
+    /// 播放器视图按当前位置筛选并绘制这些 cue。
     public private(set) var subtitleCues: [SubtitleCue] = []
 
     /// 控制条是否可见（3 秒无操作自动隐藏）。
@@ -239,6 +239,7 @@ public final class PlayerViewModel {
         buffered: Ticks = .zero,
         audioTracks: [TrackInfo] = [],
         subtitleTracks: [TrackInfo] = [],
+        subtitleCues: [SubtitleCue] = [],
         selectedAudioIndex: Int? = nil,
         selectedSubtitleIndex: Int? = nil,
         volume: Double = 1,
@@ -255,6 +256,7 @@ public final class PlayerViewModel {
         self.buffered = buffered
         self.audioTracks = audioTracks
         self.subtitleTracks = subtitleTracks
+        self.subtitleCues = subtitleCues
         self.selectedAudioIndex = selectedAudioIndex
         self.selectedSubtitleIndex = selectedSubtitleIndex
         self.volume = volume
@@ -499,6 +501,7 @@ public final class PlayerViewModel {
         if let selectedSubtitleIndex,
            !subtitleTracks.contains(where: { $0.playerIndex == selectedSubtitleIndex }) {
             self.selectedSubtitleIndex = nil
+            subtitleCues = []
         }
     }
 
@@ -632,11 +635,10 @@ public final class PlayerViewModel {
             guard subtitleTracks.contains(where: { $0.playerIndex == index }) else { return }
             lastSubtitleIndex = index
         }
-        selectedSubtitleIndex = index
-        if index == nil {
-            // 关闭字幕时立刻清掉当前 cue，否则最后一句会一直贴在画面上。
+        if selectedSubtitleIndex != index {
             subtitleCues = []
         }
+        selectedSubtitleIndex = index
         await engine?.selectSubtitleTrack(index)
     }
 

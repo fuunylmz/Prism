@@ -439,6 +439,14 @@ enum PlayerPreviewModel {
             buffered: Ticks(seconds: 2400),
             audioTracks: MockPlaybackEngine.sampleAudioTracks,
             subtitleTracks: MockPlaybackEngine.sampleSubtitleTracks,
+            subtitleCues: [
+                SubtitleCue(
+                    id: 1,
+                    start: Ticks(seconds: 700),
+                    end: Ticks(seconds: 800),
+                    body: .text("这是字幕显示预览")
+                )
+            ],
             selectedAudioIndex: 1,
             selectedSubtitleIndex: 4,
             volume: 0.8

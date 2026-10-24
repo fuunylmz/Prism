@@ -92,7 +92,13 @@ public protocol SearchImageProviding: Sendable {
     ///   - tag: 服务端给的图片 tag；`nil` 或空串表示没有该图片。
     ///   - maxWidth: 期望的最大宽度（pt），用于让服务器返回合适档位。
     /// - Returns: 可直接交给 ``SwiftUI/AsyncPosterImage`` 的地址；没有图片时为 `nil`。
-    func imageURL(for id: String, tag: String?, maxWidth: Int) -> URL?
+    func imageURL(for id: String, kind: ImageKind, tag: String?, maxWidth: Int) -> URL?
+}
+
+public extension SearchImageProviding {
+    func imageURL(for id: String, tag: String?, maxWidth: Int) -> URL? {
+        imageURL(for: id, kind: .primary, tag: tag, maxWidth: maxWidth)
+    }
 }
 
 // MARK: - 结果分组
@@ -522,11 +528,13 @@ public final class SearchViewModel {
     /// - Parameter item: 媒体条目。
     /// - Returns: 行模型。
     public func resultItem(for item: MediaItem) -> SearchResultItem {
-        SearchResultItem(
+        let source = item.imageSource(for: .primary)
+        return SearchResultItem(
             item: item,
             imageURL: imageProvider?.imageURL(
-                for: item.id,
-                tag: item.primaryImageTag,
+                for: source?.itemId ?? item.id,
+                kind: source?.kind ?? .primary,
+                tag: source?.tag,
                 maxWidth: item.type == .episode ? 160 : 240
             )
         )
@@ -548,7 +556,13 @@ public final class SearchViewModel {
     /// - Parameter item: 媒体条目。
     /// - Returns: 地址；没有海报时为 `nil`。
     public func posterURL(for item: MediaItem) -> URL? {
-        imageProvider?.imageURL(for: item.id, tag: item.primaryImageTag, maxWidth: 360)
+        let source = item.imageSource(for: .primary)
+        return imageProvider?.imageURL(
+            for: source?.itemId ?? item.id,
+            kind: source?.kind ?? .primary,
+            tag: source?.tag,
+            maxWidth: 360
+        )
     }
 
     /// 人物头像地址。

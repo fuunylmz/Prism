@@ -32,6 +32,19 @@ public final class SessionBootstrapper {
     /// 当前阶段。
     public private(set) var phase: Phase = .restoring
 
+    /// 已登记的服务器，供主界面的切换器展示。
+    public private(set) var availableServers: [ServerConnection] = []
+
+    /// 连接页当前预选的服务器；添加新服务器时为 `nil`。
+    public private(set) var pendingConnectionServer: ServerConnection?
+    /// 目标服务器最近使用的用户名，重新登录时用于预填。
+    public private(set) var pendingConnectionUsername = ""
+
+    /// 进入连接页前的会话，取消时恢复。
+    private var sessionBeforeConnection: PrismSession?
+
+    public var canCancelConnection: Bool { sessionBeforeConnection != nil }
+
     /// 凭据存储（服务器 + 用户名 + 密码）。
     public let store: CredentialStore
 
@@ -75,6 +88,7 @@ public final class SessionBootstrapper {
     /// 用户最多重新登录一次，不该因为一条坏记录打不开 App。
     public func restore() async {
         do {
+            availableServers = await registry.servers()
             switch try await restoration.restore() {
             case let .needsRelogin(credential, server):
                 // 本机存的是密码而不是 token，所以启动时必须联网换一次新 token。
@@ -86,6 +100,7 @@ public final class SessionBootstrapper {
                 }
                 let prismSession = makeSession(server: server, auth: session)
                 await prismSession.activate()
+                availableServers = await registry.servers()
                 phase = .ready(prismSession)
             case .signedOut, .unknown:
                 phase = .needsConnection
@@ -124,6 +139,7 @@ public final class SessionBootstrapper {
 
             let prismSession = makeSession(server: server, auth: auth)
             await prismSession.activate()
+            availableServers = await registry.servers()
             phase = .ready(prismSession)
         } catch let error as EmbyError {
             switch error {
@@ -173,6 +189,7 @@ public final class SessionBootstrapper {
         // 于是每次启动都是全新的登录页。
         await registry.upsert(server)
         await registry.markUsed(id: server.id)
+        availableServers = await registry.servers()
 
         if persist {
             do {
@@ -191,7 +208,97 @@ public final class SessionBootstrapper {
 
         let session = makeSession(server: server, auth: auth)
         await session.activate()
+        pendingConnectionServer = nil
+        pendingConnectionUsername = ""
+        sessionBeforeConnection = nil
         phase = .ready(session)
+    }
+
+    /// 切换到另一台已登记的服务器。
+    ///
+    /// 每台服务器使用自己最近一次成功登录的凭据重新认证；认证失败时保留当前会话，
+    /// 避免切换失败把用户无故踢回登录页。
+    ///
+    /// - Parameter serverID: 目标服务器 id。
+    /// - Returns: 是否成功切换。
+    @discardableResult
+    public func switchServer(id serverID: String) async -> Bool {
+        guard let target = (await registry.servers()).first(where: { $0.id == serverID }) else {
+            persistenceFailure = "找不到要切换的服务器。"
+            return false
+        }
+
+        guard let credential = await latestCredential(for: serverID) else {
+            beginConnection(target: target)
+            return false
+        }
+
+        do {
+            let auth = try await authenticate(target, credential.username, credential.password)
+            guard auth.serverId == target.id else {
+                persistenceFailure = "服务器身份与保存的记录不匹配。"
+                return false
+            }
+            do {
+                try await restoration.signIn(
+                    auth,
+                    username: credential.username,
+                    password: credential.password,
+                    server: target
+                )
+                persistenceFailure = nil
+            } catch let error as SessionStoreError {
+                // The remote login succeeded; local persistence only affects the next launch.
+                persistenceFailure = Self.message(for: error)
+            }
+            await registry.upsert(target)
+            await registry.markUsed(id: target.id)
+            availableServers = await registry.servers()
+            let session = makeSession(server: target, auth: auth)
+            await session.activate()
+            phase = .ready(session)
+            return true
+        } catch let error as EmbyError {
+            if error == .unauthorized || error == .forbidden {
+                try? await store.markLoggedOut(serverId: serverID)
+                beginConnection(target: target, username: credential.username)
+                return false
+            }
+            persistenceFailure = error == .unauthorized || error == .forbidden
+                ? "这台服务器的登录信息已失效，请重新登录。"
+                : "暂时无法连接这台服务器。"
+            return false
+        } catch let error as SessionStoreError {
+            persistenceFailure = Self.message(for: error)
+            return false
+        } catch {
+            persistenceFailure = "暂时无法连接这台服务器。"
+            return false
+        }
+    }
+
+    /// 已登录状态下启动添加服务器流程。
+    public func beginAddingServer() {
+        beginConnection(target: nil)
+    }
+
+    /// 取消添加 / 重新登录并回到此前会话。
+    public func cancelConnection() {
+        pendingConnectionServer = nil
+        pendingConnectionUsername = ""
+        guard let session = sessionBeforeConnection else { return }
+        sessionBeforeConnection = nil
+        phase = .ready(session)
+    }
+
+    private func beginConnection(target: ServerConnection?, username: String = "") {
+        if case let .ready(session) = phase {
+            sessionBeforeConnection = session
+        }
+        pendingConnectionServer = target
+        pendingConnectionUsername = username
+        persistenceFailure = nil
+        phase = .needsConnection
     }
 
     /// 把存储错误翻译成用户能懂的话。
@@ -233,7 +340,21 @@ public final class SessionBootstrapper {
 
     private func server(for auth: AuthSession) async -> ServerConnection? {
         let servers = await registry.servers()
-        return servers.first { $0.id == auth.serverId } ?? servers.first
+        return servers.first { $0.id == auth.serverId }
+    }
+
+    private func latestCredential(for serverID: String) async -> StoredCredential? {
+        let credentials = (try? await store.loadAll())?.filter {
+            $0.serverId == serverID && $0.isUsable
+        } ?? []
+        return credentials.enumerated().max { lhs, rhs in
+            switch (lhs.element.lastSignedInAt, rhs.element.lastSignedInAt) {
+            case let (left?, right?): return left == right ? lhs.offset < rhs.offset : left < right
+            case (nil, nil): return lhs.offset < rhs.offset
+            case (nil, _?): return true
+            case (_?, nil): return false
+            }
+        }?.element
     }
 
     private func makeSession(server: ServerConnection, auth: AuthSession) -> PrismSession {

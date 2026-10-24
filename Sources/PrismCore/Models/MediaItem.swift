@@ -17,6 +17,19 @@ import Foundation
 /// 5. `RunTimeTicks` 用 ``Ticks`` 承载（`Int64?`）；`UserData` 缺失时给
 ///    ``UserItemData/empty``。
 public struct MediaItem: Sendable, Codable, Hashable, Identifiable {
+    public struct ImageSource: Sendable, Hashable {
+        public let itemId: String
+        public let kind: ImageKind
+        public let tag: String
+        public let index: Int?
+
+        public init(itemId: String, kind: ImageKind, tag: String, index: Int? = nil) {
+            self.itemId = itemId
+            self.kind = kind
+            self.tag = tag
+            self.index = index
+        }
+    }
     /// 条目 id。
     public let id: String
     /// 标题。
@@ -41,6 +54,19 @@ public struct MediaItem: Sendable, Codable, Hashable, Identifiable {
     public let imageTags: [ImageKind: String]
     /// 背景图 tag 列表（可多张）。
     public let backdropTags: [String]
+    /// 所属剧集海报 tag（Episode 常没有自己的 Primary 时使用）。
+    public let seriesPrimaryImageTag: String?
+    /// 主图实际所属条目 id；缺失时可用 `seriesId` 作为剧集来源。
+    public let primaryImageItemId: String?
+    /// 父级背景图来源。
+    public let parentBackdropItemId: String?
+    public let parentBackdropTags: [String]
+    /// 父级缩略图来源。
+    public let parentThumbItemId: String?
+    public let parentThumbImageTag: String?
+    /// 父级 Logo 来源。
+    public let parentLogoItemId: String?
+    public let parentLogoImageTag: String?
     /// 当前用户的观看状态。
     public let userData: UserItemData
     /// 所属剧集 id（仅单集 / 季有值）。
@@ -85,6 +111,14 @@ public struct MediaItem: Sendable, Codable, Hashable, Identifiable {
         genres: [String] = [],
         imageTags: [ImageKind: String] = [:],
         backdropTags: [String] = [],
+        seriesPrimaryImageTag: String? = nil,
+        primaryImageItemId: String? = nil,
+        parentBackdropItemId: String? = nil,
+        parentBackdropTags: [String] = [],
+        parentThumbItemId: String? = nil,
+        parentThumbImageTag: String? = nil,
+        parentLogoItemId: String? = nil,
+        parentLogoImageTag: String? = nil,
         userData: UserItemData = .empty,
         seriesId: String? = nil,
         seasonId: String? = nil,
@@ -111,6 +145,14 @@ public struct MediaItem: Sendable, Codable, Hashable, Identifiable {
         self.genres = genres
         self.imageTags = imageTags
         self.backdropTags = backdropTags
+        self.seriesPrimaryImageTag = seriesPrimaryImageTag
+        self.primaryImageItemId = primaryImageItemId
+        self.parentBackdropItemId = parentBackdropItemId
+        self.parentBackdropTags = parentBackdropTags
+        self.parentThumbItemId = parentThumbItemId
+        self.parentThumbImageTag = parentThumbImageTag
+        self.parentLogoItemId = parentLogoItemId
+        self.parentLogoImageTag = parentLogoImageTag
         self.userData = userData
         self.seriesId = seriesId
         self.seasonId = seasonId
@@ -151,6 +193,40 @@ public struct MediaItem: Sendable, Codable, Hashable, Identifiable {
     /// 缩略图 tag。
     public var thumbImageTag: String? {
         imageTags[.thumb]
+    }
+
+    /// 返回图片真正所属的条目与 tag，包含 Emby 的剧集/父级图片回退。
+    public func imageSource(for kind: ImageKind) -> ImageSource? {
+        switch kind {
+        case .primary:
+            if let tag = primaryImageTag { return ImageSource(itemId: id, kind: .primary, tag: tag) }
+            if let tag = seriesPrimaryImageTag {
+                return ImageSource(itemId: primaryImageItemId ?? seriesId ?? id, kind: .primary, tag: tag)
+            }
+            if let itemId = parentThumbItemId, let tag = parentThumbImageTag {
+                return ImageSource(itemId: itemId, kind: .thumb, tag: tag)
+            }
+        case .backdrop:
+            if let tag = backdropTags.first { return ImageSource(itemId: id, kind: .backdrop, tag: tag, index: 0) }
+            if let tag = imageTags[.backdrop] { return ImageSource(itemId: id, kind: .backdrop, tag: tag) }
+            if let itemId = parentBackdropItemId, let tag = parentBackdropTags.first {
+                return ImageSource(itemId: itemId, kind: .backdrop, tag: tag, index: 0)
+            }
+        case .thumb:
+            if let tag = thumbImageTag { return ImageSource(itemId: id, kind: .thumb, tag: tag) }
+            if let itemId = parentThumbItemId, let tag = parentThumbImageTag {
+                return ImageSource(itemId: itemId, kind: .thumb, tag: tag)
+            }
+            return imageSource(for: .primary)
+        case .logo:
+            if let tag = logoImageTag { return ImageSource(itemId: id, kind: .logo, tag: tag) }
+            if let itemId = parentLogoItemId, let tag = parentLogoImageTag {
+                return ImageSource(itemId: itemId, kind: .logo, tag: tag)
+            }
+        default:
+            if let tag = imageTags[kind] { return ImageSource(itemId: id, kind: kind, tag: tag) }
+        }
+        return nil
     }
 
     /// 观看进度（0...1）。
@@ -194,6 +270,14 @@ public struct MediaItem: Sendable, Codable, Hashable, Identifiable {
         case genres = "Genres"
         case imageTags = "ImageTags"
         case backdropTags = "BackdropImageTags"
+        case seriesPrimaryImageTag = "SeriesPrimaryImageTag"
+        case primaryImageItemId = "PrimaryImageItemId"
+        case parentBackdropItemId = "ParentBackdropItemId"
+        case parentBackdropTags = "ParentBackdropImageTags"
+        case parentThumbItemId = "ParentThumbItemId"
+        case parentThumbImageTag = "ParentThumbImageTag"
+        case parentLogoItemId = "ParentLogoItemId"
+        case parentLogoImageTag = "ParentLogoImageTag"
         case userData = "UserData"
         case seriesId = "SeriesId"
         case seasonId = "SeasonId"
@@ -230,6 +314,14 @@ public struct MediaItem: Sendable, Codable, Hashable, Identifiable {
         self.genres = container.decodeStringArrayIfPresent(forKey: .genres)
         self.imageTags = Self.normalizeImageTags(container.decodeStringDictionaryIfPresent(forKey: .imageTags))
         self.backdropTags = container.decodeStringArrayIfPresent(forKey: .backdropTags)
+        self.seriesPrimaryImageTag = Self.nonEmpty(container.decodeFlexibleString(forKey: .seriesPrimaryImageTag))
+        self.primaryImageItemId = Self.nonEmpty(container.decodeFlexibleString(forKey: .primaryImageItemId))
+        self.parentBackdropItemId = Self.nonEmpty(container.decodeFlexibleString(forKey: .parentBackdropItemId))
+        self.parentBackdropTags = container.decodeStringArrayIfPresent(forKey: .parentBackdropTags)
+        self.parentThumbItemId = Self.nonEmpty(container.decodeFlexibleString(forKey: .parentThumbItemId))
+        self.parentThumbImageTag = Self.nonEmpty(container.decodeFlexibleString(forKey: .parentThumbImageTag))
+        self.parentLogoItemId = Self.nonEmpty(container.decodeFlexibleString(forKey: .parentLogoItemId))
+        self.parentLogoImageTag = Self.nonEmpty(container.decodeFlexibleString(forKey: .parentLogoImageTag))
         self.userData = container.decodeLossyObject(UserItemData.self, forKey: .userData) ?? .empty
 
         self.seriesId = container.decodeFlexibleString(forKey: .seriesId)
@@ -262,6 +354,14 @@ public struct MediaItem: Sendable, Codable, Hashable, Identifiable {
         try container.encode(genres, forKey: .genres)
         try container.encode(imageTags, forKey: .imageTags)
         try container.encode(backdropTags, forKey: .backdropTags)
+        try container.encodeIfPresent(seriesPrimaryImageTag, forKey: .seriesPrimaryImageTag)
+        try container.encodeIfPresent(primaryImageItemId, forKey: .primaryImageItemId)
+        try container.encodeIfPresent(parentBackdropItemId, forKey: .parentBackdropItemId)
+        try container.encode(parentBackdropTags, forKey: .parentBackdropTags)
+        try container.encodeIfPresent(parentThumbItemId, forKey: .parentThumbItemId)
+        try container.encodeIfPresent(parentThumbImageTag, forKey: .parentThumbImageTag)
+        try container.encodeIfPresent(parentLogoItemId, forKey: .parentLogoItemId)
+        try container.encodeIfPresent(parentLogoImageTag, forKey: .parentLogoImageTag)
         try container.encode(userData, forKey: .userData)
         try container.encodeIfPresent(seriesId, forKey: .seriesId)
         try container.encodeIfPresent(seasonId, forKey: .seasonId)
@@ -289,6 +389,11 @@ public struct MediaItem: Sendable, Codable, Hashable, Identifiable {
             result[ImageKind(key)] = value
         }
         return result
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 
     /// 解码可选的 `People` 数组，并区分“字段缺失”与“空数组”。

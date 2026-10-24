@@ -54,7 +54,11 @@ public struct RootView: View {
         case .restoring:
             preparingView
         case .needsConnection:
-            ConnectView { server, auth, credentials, persist in
+            ConnectView(
+                initialServer: bootstrapper.pendingConnectionServer,
+                initialUsername: bootstrapper.pendingConnectionUsername,
+                onCancel: cancelConnectionAction
+            ) { server, auth, credentials, persist in
                 await bootstrapper.signedIn(
                     server: server,
                     auth: auth,
@@ -63,6 +67,7 @@ public struct RootView: View {
                     persist: persist
                 )
             }
+            .id(bootstrapper.pendingConnectionServer?.id ?? "new-server")
         case let .ready(session):
             RootShell(
                 model: navigationModel(for: session, signOut: { bootstrapper.requestSignOut() }),
@@ -85,6 +90,11 @@ public struct RootView: View {
         .background(Palette.surface)
     }
 
+    private var cancelConnectionAction: (@MainActor @Sendable () -> Void)? {
+        guard bootstrapper.canCancelConnection else { return nil }
+        return { bootstrapper.cancelConnection() }
+    }
+
     // MARK: 导航
 
     /// 为当前会话建立带有服务器、用户和连接状态的导航模型。
@@ -99,7 +109,7 @@ public struct RootView: View {
         signOut: (@MainActor () -> Void)? = nil
     ) -> NavigationModel {
         let model = NavigationModel(
-            servers: [session.server],
+            servers: bootstrapper.availableServers.isEmpty ? [session.server] : bootstrapper.availableServers,
             currentServerID: session.server.id,
             currentUser: session.user
         )
@@ -107,6 +117,21 @@ public struct RootView: View {
         if let signOut {
             model.onSignOut = signOut
         }
+        model.onSelectServer = { [weak model] serverID in
+            Task { @MainActor in
+                let switched = await bootstrapper.switchServer(id: serverID)
+                guard let model else { return }
+                if switched {
+                    model.completeServerSelection(id: serverID)
+                } else {
+                    model.failServerSelection(
+                        id: serverID,
+                        status: bootstrapper.persistenceFailure?.contains("失效") == true ? .unauthorized : .offline
+                    )
+                }
+            }
+        }
+        model.onAddServer = { bootstrapper.beginAddingServer() }
         return model
     }
 

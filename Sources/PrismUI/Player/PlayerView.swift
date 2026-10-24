@@ -54,6 +54,8 @@ public struct PlayerView: View {
     /// 是否全屏（由窗口通知回写）。
     @State private var isFullScreen = false
 
+    @Bindable private var subtitleSettings: AppSettings
+
     /// 键盘焦点。
     @FocusState private var isKeyboardFocused: Bool
 
@@ -94,6 +96,7 @@ public struct PlayerView: View {
         self.onNext = onNext
         self.onRetry = onRetry
         self.onTogglePiP = onTogglePiP
+        self._subtitleSettings = Bindable(wrappedValue: .shared)
     }
 
     public var body: some View {
@@ -118,6 +121,12 @@ public struct PlayerView: View {
                         }
                     )
                 )
+
+            SubtitleOverlay(
+                cues: model.subtitleCues,
+                position: model.position,
+                settings: subtitleSettings
+            )
 
             centerOverlay
 

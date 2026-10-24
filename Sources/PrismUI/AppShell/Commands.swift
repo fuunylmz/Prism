@@ -80,10 +80,9 @@ public struct PrismCommands: Commands {
             .disabled(model == nil || (model?.servers.isEmpty ?? true))
 
             Button("添加服务器…") {
-                // v1.0 的添加流程由连接向导工单接入；外壳只保留菜单位。
+                model?.onAddServer?()
             }
-            .disabled(true)
-            .help("添加服务器流程由连接向导接入后启用")
+            .disabled(model?.onAddServer == nil)
 
             Button("退出登录") {
                 model?.requestSignOut()
@@ -113,7 +112,7 @@ public struct PrismCommands: Commands {
             .disabled(model == nil)
         }
 
-        // 显示菜单：返回、边栏与详情栏。
+        // 显示菜单：返回与边栏。
         CommandGroup(after: .sidebar) {
             Divider()
             Button("返回") { model?.goBack() }
@@ -126,10 +125,6 @@ public struct PrismCommands: Commands {
             .keyboardShortcut(NavigationShortcuts.toggleSidebar)
             .disabled(model == nil)
 
-            Button(model?.isDetailColumnCollapsed == true ? "显示详情栏" : "隐藏详情栏") {
-                model?.toggleDetailColumn()
-            }
-            .disabled(model?.canToggleDetailColumn != true)
         }
     }
 }

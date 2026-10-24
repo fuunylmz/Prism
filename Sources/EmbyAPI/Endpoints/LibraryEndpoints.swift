@@ -142,6 +142,11 @@ public struct ResumeEndpoint: EmbyEndpoint {
         query.limit = limit
         query.mediaTypes = [.video]
         query.recursive = true
+        // Resume 的默认响应在部分 Emby 版本不会带 ImageTags。
+        // 首页横版卡需要用 Backdrop/Primary tag 生成图片 URL，必须显式打开图片字段。
+        query.enableImages = true
+        query.imageTypeLimit = 1
+        query.enableImageTypes = [.primary, .backdrop, .thumb]
         self.init(userId: userId, query: query)
     }
 
@@ -225,6 +230,7 @@ public struct LatestEndpoint: EmbyEndpoint {
 
     /// 是否返回 `UserData`。
     public let enableUserData: Bool?
+    public let enableImages: Bool
 
     /// 以最常用参数创建。
     ///
@@ -252,6 +258,7 @@ public struct LatestEndpoint: EmbyEndpoint {
         self.imageTypeLimit = 1
         self.enableImageTypes = [.primary, .backdrop, .thumb]
         self.enableUserData = true
+        self.enableImages = true
     }
 
     /// `/Users/{userId}/Items/Latest`。
@@ -270,6 +277,7 @@ public struct LatestEndpoint: EmbyEndpoint {
         accumulator.put("ImageTypeLimit", imageTypeLimit)
         accumulator.putList("EnableImageTypes", enableImageTypes)
         accumulator.put("EnableUserData", enableUserData)
+        accumulator.put("EnableImages", enableImages)
         return accumulator.values
     }
 }
@@ -309,6 +317,7 @@ public struct NextUpEndpoint: EmbyEndpoint {
 
     /// 是否返回 `UserData`。
     public let enableUserData: Bool?
+    public let enableImages: Bool
 
     /// 以最常用参数创建。
     ///
@@ -326,6 +335,7 @@ public struct NextUpEndpoint: EmbyEndpoint {
         self.imageTypeLimit = 1
         self.enableImageTypes = [.primary, .backdrop, .thumb]
         self.enableUserData = true
+        self.enableImages = true
     }
 
     /// `/Shows/NextUp`。
@@ -343,6 +353,7 @@ public struct NextUpEndpoint: EmbyEndpoint {
         accumulator.put("ImageTypeLimit", imageTypeLimit)
         accumulator.putList("EnableImageTypes", enableImageTypes)
         accumulator.put("EnableUserData", enableUserData)
+        accumulator.put("EnableImages", enableImages)
         return accumulator.values
     }
 }

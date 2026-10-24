@@ -30,6 +30,7 @@ public struct FilterBar: View {
     private let onLayoutChange: (GridLayout) -> Void
 
     @State private var isFilterPopoverPresented = false
+    @State private var contentWidth: CGFloat = 0
 
     /// 创建筛选排序栏。
     ///
@@ -80,11 +81,16 @@ public struct FilterBar: View {
                 compactControls
             }
         }
-        .padding(.horizontal, Spacing.lg)
+        .padding(.horizontal, PageMetrics.horizontalInset(for: contentWidth))
         .padding(.vertical, Spacing.sm)
         // 不透明底色：内容滚动到栏下方时不会透出来（栏本身不在 ScrollView 里，
         // 但窗口背景是半透明的，这里显式铺一层）。
         .background(Palette.surface)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            contentWidth = width
+        }
     }
 
     // MARK: 左侧

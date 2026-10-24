@@ -172,24 +172,78 @@ struct NavigationModelTests {
         #expect(model.contentRoute == .home)
     }
 
-    @Test("窄窗口下点开详情仍然会显示详情栏")
-    func narrowWindowStillShowsOpenedDetail() {
+    @Test("接入运行时切换时等待认证成功后再更新当前服务器")
+    func serverSelectionWaitsForRuntimeCommit() throws {
+        let first = try makeServer(id: "srv-a", name: "客厅")
+        let second = try makeServer(id: "srv-b", name: "书房")
+        let model = NavigationModel(servers: [first, second], currentServerID: first.id)
+        var requestedID: String?
+        model.onSelectServer = { requestedID = $0 }
+
+        model.selectServer(id: second.id)
+
+        #expect(requestedID == second.id)
+        #expect(model.currentServerID == first.id)
+        #expect(model.status(for: second.id) == .connecting)
+
+        model.completeServerSelection(id: second.id)
+
+        #expect(model.currentServerID == second.id)
+        #expect(model.contentRoute == .home)
+        #expect(model.status(for: second.id) == .connected)
+    }
+
+    @Test("点开详情后主内容栏切换为全宽详情页")
+    func openedDetailUsesContentColumn() {
         let model = NavigationModel()
         model.navigate(to: .library(id: "real-movies-view", type: .movies))
         model.updateWindowWidth(980)
 
-        // 还没选条目：窄窗口下不自动显示详情栏（三栏放不下）。
+        // 详情页不再依赖窗口宽度或第三列。
         #expect(model.showsDetailColumn == false)
 
         model.navigate(to: .detail(itemId: "movie-1"))
 
-        // 用户明确打开了条目：必须显示，否则点海报「毫无反应」。
-        #expect(model.showsDetailColumn)
+        #expect(model.contentRoute == .detail(itemId: "movie-1"))
+        #expect(model.canGoBack)
         #expect(model.selectedDetailItemID == "movie-1")
     }
 
-    @Test("手动折叠详情栏后，选中条目也不会强行弹出")
-    func collapsedDetailColumnStaysCollapsed() {
+    @Test("详情返回恢复原媒体库且不改变侧边栏可见状态")
+    func backFromDetailPreservesSidebarAndRootRoute() {
+        let model = NavigationModel()
+        let library = Route.library(id: "real-movies-view", type: .movies)
+        model.navigate(to: library)
+        model.navigate(to: .detail(itemId: "movie-1"))
+
+        #expect(model.rootContentRoute == library)
+        #expect(model.contentRoute == .detail(itemId: "movie-1"))
+
+        model.goBack()
+
+        #expect(model.contentRoute == library)
+        #expect(model.activeRootRoute == library)
+        #expect(model.detailPath.isEmpty)
+        #expect(model.isSidebarVisible)
+    }
+
+    @Test("详情返回不改变用户手动隐藏的侧栏状态")
+    func backFromDetailPreservesHiddenSidebar() {
+        let model = NavigationModel()
+        let library = Route.library(id: "real-movies-view", type: .movies)
+        model.navigate(to: library)
+        model.isSidebarVisible = false
+        model.navigate(to: .detail(itemId: "movie-1"))
+
+        model.goBack()
+
+        #expect(model.rootContentRoute == library)
+        #expect(model.selectedDetailItemID == nil)
+        #expect(model.isSidebarVisible == false)
+    }
+
+    @Test("详情页不显示无效的详情栏切换状态")
+    func detailColumnToggleIsNoOp() {
         let model = NavigationModel()
         model.navigate(to: .library(id: "real-movies-view", type: .movies))
         model.updateWindowWidth(1400)
@@ -197,10 +251,9 @@ struct NavigationModelTests {
 
         model.navigate(to: .detail(itemId: "movie-1"))
 
-        // `navigate(to: .detail)` 会主动展开（用户点开就是想看），
-        // 这里验证的是「展开后状态自洽」。
         #expect(model.isDetailColumnCollapsed == false)
-        #expect(model.showsDetailColumn)
+        #expect(model.showsDetailColumn == false)
+        #expect(model.contentRoute == .detail(itemId: "movie-1"))
     }
 
     @Test("窗口标题跟随当前媒体库名称")

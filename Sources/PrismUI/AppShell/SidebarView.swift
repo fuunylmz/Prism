@@ -14,6 +14,8 @@ import SwiftUI
 /// hover 只叠加一层极淡的语义色，且尊重「减弱动态效果」。
 /// 所有行都是 `List(selection:)` 的 tag 行，因此支持 ↑↓ 键盘选择与 VoiceOver。
 struct SidebarView: View {
+    static let columnWidth: CGFloat = 220
+
     /// 导航模型。
     @Bindable var model: NavigationModel
 
@@ -43,7 +45,7 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .safeAreaInset(edge: .top, spacing: 0) { brandHeader }
         .safeAreaInset(edge: .bottom, spacing: 0) { footer }
-        .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
+        .frame(width: Self.columnWidth)
     }
 
     // MARK: 选中绑定

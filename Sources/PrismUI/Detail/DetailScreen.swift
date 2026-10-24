@@ -68,6 +68,39 @@ public struct DetailScreen: View {
     }
 }
 
+struct DetailPageScaffold<Content: View>: View {
+    private let header: CinematicHeader
+    private let content: Content
+
+    init(
+        header: CinematicHeader,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.header = header
+        self.content = content()
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    header
+
+                    content
+                        .frame(maxWidth: 1_120, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, PageMetrics.horizontalInset(for: min(proxy.size.width, 1_120)))
+                        .padding(.top, Spacing.xl)
+                        .padding(.bottom, Spacing.xxl)
+                }
+                .frame(maxWidth: 1_120)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .background(Palette.surface)
+    }
+}
+
 // MARK: - 预览
 
 #Preview("DetailScreen · 电影") {

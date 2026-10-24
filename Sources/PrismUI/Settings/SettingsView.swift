@@ -8,9 +8,7 @@ import SwiftUI
 /// ## 形态
 ///
 /// 与 macOS「系统设置」一致：**左侧列表 + 右侧表单**，不用 sheet、不用 `TabView`
-/// 顶部分页（`docs/research/ux-benchmark.md` §S15）。这里刻意**不**嵌套
-/// `NavigationSplitView`：外层 `AppShellView` 已经是一个三栏 split view，
-/// 再套一层会让窗口的最小尺寸与折叠行为互相干扰，因此用 `List` + `Divider` +
+/// 顶部分页（`docs/research/ux-benchmark.md` §S15）。这里用 `List` + `Divider` +
 /// 内容区手写两栏，宽度与折叠完全可控。
 ///
 /// ## 与路由的联动
@@ -76,9 +74,34 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-                .frame(width: 176)
+        VStack(spacing: 0) {
+            HStack(spacing: Spacing.sm) {
+                Picker("设置面板", selection: activeTab) {
+                    ForEach(SettingsTab.allCases, id: \.self) { tab in
+                        Label(tab.title, systemImage: tab.systemImage)
+                            .tag(tab)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                .accessibilityLabel("设置面板")
+
+                Menu {
+                    Button("恢复默认设置", systemImage: "arrow.counterclockwise", role: .destructive) {
+                        isResetConfirmationPresented = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .frame(width: 28, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .help("更多设置操作")
+                .accessibilityLabel("更多设置操作")
+            }
+            .padding(.horizontal, Spacing.lg)
+            .padding(.vertical, Spacing.sm)
 
             Divider()
 
@@ -101,39 +124,6 @@ public struct SettingsView: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("全部设置会恢复为初始值，包括界面语言（语言切换需要重启 App 才会生效）。此操作无法撤销。")
-        }
-    }
-
-    // MARK: 侧栏
-
-    /// 左侧面板列表 + 底部的「恢复默认设置」。
-    private var sidebar: some View {
-        VStack(spacing: 0) {
-            List(selection: listSelection) {
-                ForEach(SettingsTab.allCases, id: \.self) { tab in
-                    Label(tab.title, systemImage: tab.systemImage)
-                        .tag(tab)
-                }
-            }
-            .listStyle(.sidebar)
-            .accessibilityLabel("设置面板")
-
-            Divider()
-
-            Button {
-                isResetConfirmationPresented = true
-            } label: {
-                Label("恢复默认设置", systemImage: "arrow.counterclockwise")
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, Spacing.md)
-            .padding(.vertical, Spacing.sm)
-            .help("把全部设置恢复为默认值")
-            .accessibilityLabel("恢复默认设置")
         }
     }
 
@@ -202,16 +192,6 @@ public struct SettingsView: View {
         externalSelection ?? $internalSelection
     }
 
-    /// `List` 单选需要的可选绑定：取消选中（`nil`）时保持原面板，避免右侧空白。
-    private var listSelection: Binding<SettingsTab?> {
-        Binding(
-            get: { activeTab.wrappedValue },
-            set: { newValue in
-                guard let newValue else { return }
-                activeTab.wrappedValue = newValue
-            }
-        )
-    }
 }
 
 // MARK: - 面板元数据
@@ -224,7 +204,7 @@ extension SettingsTab {
         case .subtitles: "字幕语言与样式。样式只影响文本字幕，位图字幕保持原始画面。"
         case .network: "当前服务器、连接测试与超时策略。"
         case .appearance: "主题与界面语言。"
-        case .servers: "已连接的服务器与登录状态。v1.0 只支持一台服务器。"
+        case .servers: "已连接的服务器与登录状态。可在服务器列表中切换。"
         case .about: "版本、开源许可与免责声明。"
         }
     }

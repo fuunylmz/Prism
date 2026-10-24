@@ -212,7 +212,7 @@ struct SearchPreviewImageProvider: SearchImageProviding {
     ///   - tag: 图片 tag；`nil` 时返回 `nil`（演示「没有图片」的占位图）。
     ///   - maxWidth: 期望宽度（忽略）。
     /// - Returns: 假地址。
-    func imageURL(for id: String, tag: String?, maxWidth: Int) -> URL? {
+    func imageURL(for id: String, kind: ImageKind, tag: String?, maxWidth: Int) -> URL? {
         guard tag?.isEmpty == false else { return nil }
         return SearchPreviewData.posterURL(for: id)
     }
@@ -257,7 +257,7 @@ struct SearchPreviewDataSource: SearchDataSource, SearchImageProviding {
         )
     }
 
-    func imageURL(for id: String, tag: String?, maxWidth: Int) -> URL? {
+    func imageURL(for id: String, kind: ImageKind, tag: String?, maxWidth: Int) -> URL? {
         guard tag?.isEmpty == false else { return nil }
         return SearchPreviewData.posterURL(for: id)
     }

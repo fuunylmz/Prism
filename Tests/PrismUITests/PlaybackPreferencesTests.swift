@@ -71,6 +71,18 @@ struct PlaybackPreferencesTests {
         #expect(preferences.preferredSubtitleLanguage == "zh-hans")
     }
 
+    @Test("字幕自动模式和界面语言会传给播放协商")
+    func subtitleModeAndInterfaceLanguageArePassedThrough() {
+        let settings = makeSettings()
+        settings.subtitleMode = .forced
+        settings.language = .zhHans
+
+        let preferences = PlaybackPreferences(appSettings: settings)
+
+        #expect(preferences.subtitleMode == .forced)
+        #expect(preferences.interfaceLanguage == "chi")
+    }
+
     @Test("空字符串等同于「不干预」，不是「只选空语言」")
     func blankLanguageIsNil() {
         let settings = makeSettings()

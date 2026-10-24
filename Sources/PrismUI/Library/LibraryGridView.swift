@@ -30,9 +30,6 @@ public struct LibraryGridView: View {
     /// 海报最大宽度（pt），防止超宽窗口下海报被拉得过大。
     public static let maximumPosterWidth: CGFloat = 220
 
-    /// 网格左右内边距。
-    private static let contentPadding = Spacing.xl
-
     // MARK: 输入
 
     private let items: [MediaItem]
@@ -176,7 +173,8 @@ public struct LibraryGridView: View {
                 posterCell(item)
             }
         }
-        .padding(Spacing.xl)
+        .padding(.horizontal, PageMetrics.horizontalInset(for: containerWidth))
+        .padding(.vertical, Spacing.xl)
     }
 
     private func posterCell(_ item: MediaItem) -> some View {
@@ -226,7 +224,7 @@ public struct LibraryGridView: View {
                 .id(item.id)
             }
         }
-        .padding(.horizontal, Spacing.xl)
+        .padding(.horizontal, PageMetrics.horizontalInset(for: containerWidth))
         .padding(.vertical, Spacing.md)
     }
 
@@ -333,7 +331,8 @@ public struct LibraryGridView: View {
     /// `floor((可用宽度 + 间距) / (最小列宽 + 间距))`。
     private var columnCount: Int {
         guard layout == .poster, containerWidth > 0 else { return 1 }
-        let available = max(containerWidth - Self.contentPadding * 2, Self.minimumPosterWidth)
+        let inset = PageMetrics.horizontalInset(for: containerWidth)
+        let available = max(containerWidth - inset * 2, Self.minimumPosterWidth)
         let count = Int(((available + Spacing.lg) / (Self.minimumPosterWidth + Spacing.lg)).rounded(.down))
         return max(count, 1)
     }

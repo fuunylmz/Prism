@@ -46,7 +46,12 @@ public final class PrismSession {
         self.session = session
         self.isDemo = isDemo || server.isDemo
         self.client = EmbyClient(server: server, identity: ClientIdentity.current())
-        self.imageLoader = EmbyImageLoader(client: self.client)
+        let scopedImageDirectory = ImageCache.Configuration.defaultDirectory
+            .appendingPathComponent(server.id, isDirectory: true)
+        let imageCache = ImageCache(
+            configuration: ImageCache.Configuration(directory: scopedImageDirectory)
+        )
+        self.imageLoader = EmbyImageLoader(client: self.client, cache: imageCache)
     }
 
     /// 把 token 与用户 id 注入客户端。

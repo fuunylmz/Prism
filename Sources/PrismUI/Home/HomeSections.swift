@@ -32,7 +32,7 @@ enum HomeMetrics {
     /// - Parameter width: 内容区宽度。
     /// - Returns: 左右边距。
     static func horizontalPadding(for width: CGFloat) -> CGFloat {
-        width >= 1200 ? Spacing.xxl : Spacing.xl
+        PageMetrics.horizontalInset(for: width)
     }
 }
 
@@ -63,19 +63,12 @@ struct RailScaffold<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
-                Text(verbatim: title)
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.textPrimary)
-
-                Spacer(minLength: Spacing.md)
-
+        VStack(alignment: .leading, spacing: PageMetrics.sectionHeaderSpacing) {
+            PrismSectionHeader(title) {
                 if let onSeeAll {
                     SeeAllButton(action: onSeeAll)
                 }
             }
-            .accessibilityAddTraits(.isHeader)
 
             ScrollView(.horizontal) {
                 content
@@ -450,17 +443,14 @@ struct LibraryGrid: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("媒体库")
-                .font(Typography.title)
-                .foregroundStyle(Palette.textPrimary)
-                .accessibilityAddTraits(.isHeader)
+        VStack(alignment: .leading, spacing: PageMetrics.sectionHeaderSpacing) {
+            PrismSectionHeader("媒体库")
 
             LazyVGrid(columns: columns, alignment: .leading, spacing: Spacing.lg) {
                 ForEach(libraries) { library in
                     LibraryTile(
                         library: library,
-                        imageURL: resolver.url(for: library.item, kind: .primary, maxWidth: 480),
+                        imageURL: resolver.posterURL(for: library.item, maxWidth: 480),
                         onSelect: { onSelect(library) }
                     )
                 }

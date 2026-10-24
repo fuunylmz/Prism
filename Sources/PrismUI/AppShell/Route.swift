@@ -11,9 +11,9 @@ import PrismCore
 /// 约定：
 /// - 侧边栏一级导航只产生 ``home`` / ``library(id:type:)`` / ``search`` /
 ///   ``downloads`` / ``settings(_:)``；
-/// - 条目详情属于**详情栏**，用 ``detail(itemId:)`` 表示，不进侧边栏导航栈；
+/// - 条目详情属于内容栏内的全屏页面，用 ``detail(itemId:)`` 表示，不进侧边栏导航栈；
 /// - 播放器是覆盖层（v1.0 为全窗口播放页），用 ``player(itemId:mediaSourceId:resumeAt:)``
-///   表示，不占三栏中的任何一栏。
+///   表示，不占用额外的详情列。
 public enum Route: Hashable, Sendable {
     /// 首页：继续观看 / 接下来 / 最近添加。
     case home
@@ -195,17 +195,12 @@ extension Route {
         }
     }
 
-    /// 该路由是否需要详情栏。
+    /// 该路由是否支持打开条目详情。
     ///
-    /// **首页也需要详情栏**：UX 规格 §S04 明确要求「首页卡片点击 → 右侧详情栏加载，不跳页」，
-    /// 而不是把用户推到媒体库页。搜索页同理（结果点开应在侧栏预览，便于连续浏览）。
-    ///
-    /// 详情栏本身是「按需出现」的：`NavigationModel.showsDetailColumn` 还要求
-    /// 用户没有手动折叠、且窗口宽度足够（≥1040pt）。所以首页在窄窗口下仍然只显示两栏。
+    /// 首页、媒体库和搜索都允许点击条目进入全宽详情页。
     public var showsDetailColumn: Bool {
         switch self {
-        case .library, .detail, .home, .search: true
-        case .downloads, .settings, .player: false
+        case .home, .library, .search, .detail, .downloads, .settings, .player: false
         }
     }
 

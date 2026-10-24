@@ -124,10 +124,10 @@ public struct EmbyLibraryDataSource: LibraryDataSource {
     }
 
     public func imageURL(for item: MediaItem, kind: ImageKind, maxWidth: Int) -> URL? {
-        guard let tag = item.imageTags[kind], !tag.isEmpty else { return nil }
+        guard let source = item.imageSource(for: kind) else { return nil }
 
         var query: [String: String] = [
-            "tag": tag,
+            "tag": source.tag,
             "maxWidth": String(maxWidth),
             "quality": "90"
         ]
@@ -135,7 +135,10 @@ public struct EmbyLibraryDataSource: LibraryDataSource {
             query["api_key"] = accessToken
         }
 
-        let path = "/Items/\(item.id)/Images/\(kind.rawValue)"
+        var path = "/Items/\(source.itemId)/Images/\(source.kind.rawValue)"
+        if let index = source.index {
+            path += "/\(index)"
+        }
         // `joinedURL` 是纯函数，只在基址非法时抛错（构造时已经校验过），
         // 因此这里用 `try?` 退化为占位图，而不是把错误抛给视图层。
         return try? RequestBuilder.joinedURL(baseURL: baseURL, path: path, query: query)

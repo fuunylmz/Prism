@@ -60,6 +60,8 @@ public struct SearchView: View {
     @FocusedValue(\.navigationModel) private var focusedNavigation
     @FocusState private var isResultsFocused: Bool
     @State private var selectedResultID: String?
+    @State private var retainedResults: SearchResults?
+    @State private var contentWidth: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // MARK: 初始化
@@ -91,14 +93,19 @@ public struct SearchView: View {
     public var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: Spacing.xl) {
+                VStack(alignment: .leading, spacing: PageMetrics.sectionSpacing) {
                     content
                 }
-                .padding(.horizontal, Spacing.xl)
+                .padding(.horizontal, PageMetrics.horizontalInset(for: contentWidth))
                 .padding(.vertical, Spacing.lg)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(Palette.surface)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { width in
+                contentWidth = width
+            }
             .onChange(of: selectedResultID) { _, newValue in
                 guard let newValue else { return }
                 withAnimation(reduceMotion ? nil : .easeOut(duration: Motion.quick)) {
@@ -112,9 +119,12 @@ public struct SearchView: View {
         .onChange(of: resolvedNavigation?.searchText) { _, _ in
             syncQueryFromNavigation()
         }
-        .onChange(of: viewModel.state) { _, _ in
+        .onChange(of: viewModel.state) { _, newState in
             // 结果换了一批，旧的选中项已经不存在，回到「未选中」。
             selectedResultID = nil
+            if case let .loaded(results) = newState {
+                retainedResults = results
+            }
         }
     }
 
@@ -129,7 +139,11 @@ public struct SearchView: View {
             case .idle:
                 landing
             case .loading:
-                loadingPlaceholder
+                if let retainedResults {
+                    resultsView(retainedResults)
+                } else {
+                    loadingPlaceholder
+                }
             case let .loaded(results):
                 resultsView(results)
             case .empty:
@@ -143,7 +157,7 @@ public struct SearchView: View {
     // MARK: 初始态
 
     private var landing: some View {
-        VStack(alignment: .leading, spacing: Spacing.xl) {
+        VStack(alignment: .leading, spacing: PageMetrics.sectionSpacing) {
             if viewModel.recentSearches.isEmpty {
                 landingHint
             } else {
@@ -191,7 +205,7 @@ public struct SearchView: View {
 
     private var popularSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionHeader("热门推荐", systemImage: "flame", count: nil)
+            PrismSectionHeader("热门推荐", systemImage: "flame")
 
             if popularTerms.isEmpty {
                 Text("热门推荐将在接入服务端统计后显示。")
@@ -270,7 +284,7 @@ public struct SearchView: View {
     // MARK: 结果
 
     private func resultsView(_ results: SearchResults) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.xxl) {
+        VStack(alignment: .leading, spacing: PageMetrics.sectionSpacing) {
             summary(results)
 
             if !results.movies.isEmpty {
@@ -293,9 +307,9 @@ public struct SearchView: View {
         .focusEffectDisabled()
         // 搜索框里按 ↓ 时，外壳自增 `resultsFocusRequest`；这里接住并把焦点交给结果区。
         .onChange(of: resolvedNavigation?.resultsFocusRequest ?? 0) { _, _ in
-            guard !viewModel.flatResults.isEmpty else { return }
+            guard !actionableResults.isEmpty else { return }
             if selectedResultID == nil {
-                selectedResultID = viewModel.flatResults.first?.id
+                selectedResultID = actionableResults.first?.id
             }
             isResultsFocused = true
         }
@@ -335,7 +349,7 @@ public struct SearchView: View {
 
     private func posterSection(_ title: String, systemImage: String, items: [MediaItem]) -> some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionHeader(title, systemImage: systemImage, count: items.count)
+            PrismSectionHeader(title, systemImage: systemImage, count: items.count)
 
             LazyVGrid(columns: posterColumns, alignment: .leading, spacing: Spacing.xl) {
                 ForEach(items) { item in
@@ -360,7 +374,7 @@ public struct SearchView: View {
 
     private func episodeSection(_ episodes: [MediaItem]) -> some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionHeader("单集", systemImage: SearchResultItem.Kind.episode.systemImage, count: episodes.count)
+            PrismSectionHeader("单集", systemImage: SearchResultItem.Kind.episode.systemImage, count: episodes.count)
 
             VStack(spacing: Spacing.xs) {
                 ForEach(episodes) { episode in
@@ -381,7 +395,7 @@ public struct SearchView: View {
 
     private func peopleSection(_ people: [Person]) -> some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionHeader("人物", systemImage: SearchResultItem.Kind.person.systemImage, count: people.count)
+            PrismSectionHeader("人物", systemImage: SearchResultItem.Kind.person.systemImage, count: people.count)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: Spacing.lg) {
@@ -389,9 +403,7 @@ public struct SearchView: View {
                         let result = viewModel.resultItem(for: person)
                         SearchPersonCell(
                             item: result,
-                            query: viewModel.trimmedQuery,
-                            isSelected: selectedResultID == person.id,
-                            onActivate: { open(result) }
+                            query: viewModel.trimmedQuery
                         )
                         .id(person.id)
                     }
@@ -486,37 +498,6 @@ public struct SearchView: View {
         }
     }
 
-    // MARK: 分组标题
-
-    private func sectionHeader(_ title: String, systemImage: String, count: Int?) -> some View {
-        HStack(spacing: Spacing.sm) {
-            Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Palette.textSecondary)
-                .accessibilityHidden(true)
-
-            Text(verbatim: title)
-                .font(Typography.headline)
-                .foregroundStyle(Palette.textPrimary)
-
-            if let count {
-                Text(verbatim: "\(count)")
-                    .font(Typography.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(Palette.textSecondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Palette.surfaceElevated))
-                    .overlay {
-                        Capsule().strokeBorder(Palette.separator, lineWidth: 1)
-                    }
-                    .accessibilityLabel(Text(verbatim: "\(count) 项"))
-            }
-
-            Spacer(minLength: 0)
-        }
-    }
-
     // MARK: 导航联动
 
     /// 生效的导航模型：构造注入优先，其次场景焦点值。
@@ -552,9 +533,7 @@ public struct SearchView: View {
     ///
     /// 默认行为：非人物结果导航到 `.detail(itemId:)`。
     ///
-    /// - Important: 搜索路由（`Route.search`）按 `Route.showsDetailColumn` 的约定
-    ///   **没有详情栏**，`NavigationModel.navigate(to: .detail(...))` 在该路由下会被忽略。
-    ///   宿主应在接入时二选一：让搜索路由显示详情栏，或传入自己的 `onOpen`。
+    /// - Important: 搜索结果打开详情后，详情页会在主内容栏全宽展示。
     ///
     /// - Parameter item: 结果条目。
     private func open(_ item: SearchResultItem) {
@@ -584,7 +563,7 @@ public struct SearchView: View {
     ///
     /// - Parameter offset: `-1` 上移，`1` 下移。
     private func moveSelection(by offset: Int) {
-        let items = viewModel.flatResults
+        let items = actionableResults
         guard !items.isEmpty else { return }
 
         guard let current = selectedResultID,
@@ -601,7 +580,7 @@ public struct SearchView: View {
     private func openSelected() {
         if let item = selectedResult {
             open(item)
-        } else if let first = viewModel.flatResults.first {
+        } else if let first = actionableResults.first {
             open(first)
         }
     }
@@ -610,14 +589,19 @@ public struct SearchView: View {
     private func playSelected() {
         if let item = selectedResult {
             play(item)
-        } else if let first = viewModel.flatResults.first {
+        } else if let first = actionableResults.first {
             play(first)
         }
     }
 
     private var selectedResult: SearchResultItem? {
         guard let selectedResultID else { return nil }
-        return viewModel.flatResults.first { $0.id == selectedResultID }
+        return actionableResults.first { $0.id == selectedResultID }
+    }
+
+    /// 人物结果当前没有可用的详情或播放路由，不加入键盘激活序列。
+    private var actionableResults: [SearchResultItem] {
+        viewModel.flatResults.filter { $0.kind != .person }
     }
 }
 
@@ -654,15 +638,12 @@ private struct SearchPosterCell: View {
 private struct SearchPersonCell: View {
     let item: SearchResultItem
     let query: String
-    let isSelected: Bool
-    let onActivate: () -> Void
 
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Button(action: onActivate) {
-            VStack(spacing: Spacing.sm) {
+        VStack(spacing: Spacing.sm) {
                 AsyncPosterImage(
                     url: item.imageURL,
                     targetSize: CGSize(width: 160, height: 160),
@@ -672,10 +653,7 @@ private struct SearchPersonCell: View {
                 .clipShape(Circle())
                 .overlay {
                     Circle()
-                        .strokeBorder(
-                            isSelected ? Palette.accent : Palette.separator,
-                            lineWidth: isSelected ? 2 : 1
-                        )
+                        .strokeBorder(Palette.separator, lineWidth: 1)
                 }
                 .scaleEffect(isHovering && !reduceMotion ? 1.04 : 1)
                 .shadow(color: .black.opacity(isHovering ? 0.25 : 0), radius: 8, y: 3)
@@ -684,15 +662,14 @@ private struct SearchPersonCell: View {
                     .font(Typography.caption)
                     .lineLimit(1)
                     .frame(maxWidth: 92)
-            }
-            .frame(width: 96)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .frame(width: 96)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(verbatim: item.accessibilityDescription))
         .onHover { isHovering = $0 }
         .animation(reduceMotion ? nil : .easeOut(duration: Motion.quick), value: isHovering)
         .help(Text(verbatim: item.accessibilityDescription))
-        .accessibilityLabel(Text(verbatim: item.accessibilityDescription))
     }
 }
 

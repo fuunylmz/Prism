@@ -3,21 +3,15 @@ import SwiftUI
 
 // MARK: - 应用外壳
 
-/// 应用主窗口的三栏外壳。
+/// 应用主窗口的固定侧栏与内容区。
 ///
 /// 结构（`docs/research/ux-benchmark.md` §2.2）：
 /// - **侧边栏**：媒体库 / 工具 / 底部固定区（设置 + 服务器胶囊）；
-/// - **内容栏**：随 ``NavigationModel/contentRoute`` 切换；
-/// - **详情栏**：媒体库路由下显示条目详情或空态；首页 / 搜索 / 设置下收起。
+/// - **主内容区**：根页面按路由切换，主页保持挂载，详情作为覆盖层显示；
 ///
-/// 只有一个 `NavigationSplitView`，不存在「两套壳」：
-/// 详情栏的显隐由「列宽收为 0」实现，而不是切换 `.doubleColumn`。
-/// 原因（已用 macOS 26 SDK 实测）：三栏 `NavigationSplitView` 的
-/// `.doubleColumn` 语义是「内容栏 + 详情栏」，会把**侧边栏**藏掉；
-/// 用它来隐藏详情栏会导致首页没有导航。`columnVisibility` 因此只负责侧边栏，
-/// 详情栏由 ``NavigationModel/showsDetailColumn`` 控制。
+/// 详情作为内容区覆盖层显示；底层主页面保持挂载，返回时不会重新创建或加载首页。
 ///
-/// 工具栏（§4.2）：leading 返回、trailing 搜索框与详情栏切换；
+/// 工具栏（§4.2）：侧栏切换、返回与搜索框；
 /// 搜索框通过 `.searchable(placement: .toolbar)` 常驻工具栏，⌘F 聚焦。
 /// 播放器以覆盖层呈现（v1.0 全窗口播放页），不塞进详情栏。
 public struct AppShellView: View {
@@ -46,17 +40,15 @@ public struct AppShellView: View {
     }
 
     public var body: some View {
-        NavigationSplitView(columnVisibility: $model.columnVisibility) {
-            SidebarView(model: model)
-        } content: {
+        HStack(spacing: 0) {
+            if model.isSidebarVisible {
+                sidebarColumn
+            }
+
             ContentColumnView(model: model, session: session)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Palette.surface)
-                .navigationSplitViewColumnWidth(min: 420, ideal: 720)
-        } detail: {
-            detailColumn
         }
-        .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 960, minHeight: 600)
         .navigationTitle(model.windowTitle)
         .toolbar { toolbarContent }
@@ -114,6 +106,28 @@ public struct AppShellView: View {
         }
     }
 
+    /// 侧栏和分隔线共用一个裁剪边界，让靠内容区的上下角保持圆弧。
+    private var sidebarColumn: some View {
+        HStack(spacing: 0) {
+            SidebarView(model: model)
+                .frame(width: SidebarView.columnWidth)
+                .frame(maxHeight: .infinity)
+            Divider()
+        }
+        .frame(width: SidebarView.columnWidth + 1)
+        .frame(maxHeight: .infinity)
+        .clipShape(
+            UnevenRoundedRectangle(
+                topLeadingRadius: Radius.panel,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: Radius.panel,
+                topTrailingRadius: Radius.panel,
+                style: .continuous
+            )
+        )
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
     // MARK: 媒体库预取
 
     /// 预取 `/Users/{id}/Views` 并把真实 view id 注入导航模型。
@@ -135,27 +149,20 @@ public struct AppShellView: View {
         }
     }
 
-    // MARK: 详情栏
-
-    /// 详情栏：需要时显示详情 / 空态，不需要时把列宽收为 0（侧边栏保持可见）。
-    @ViewBuilder
-    private var detailColumn: some View {
-        if model.showsDetailColumn {
-            DetailColumnView(model: model, session: session)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Palette.surface)
-                .navigationSplitViewColumnWidth(min: 380, ideal: 640)
-        } else {
-            Color.clear
-                .navigationSplitViewColumnWidth(0)
-                .accessibilityHidden(true)
-        }
-    }
-
     // MARK: 工具栏
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button {
+                model.toggleSidebar()
+            } label: {
+                Image(systemName: model.isSidebarVisible ? "sidebar.left" : "sidebar.right")
+            }
+            .help(model.isSidebarVisible ? "隐藏边栏" : "显示边栏")
+            .accessibilityLabel(model.isSidebarVisible ? "隐藏边栏" : "显示边栏")
+        }
+
         ToolbarItem(placement: .navigation) {
             Button {
                 model.goBack()
@@ -167,17 +174,6 @@ public struct AppShellView: View {
             .accessibilityLabel("返回")
         }
 
-        if model.canToggleDetailColumn {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.toggleDetailColumn()
-                } label: {
-                    Image(systemName: model.showsDetailColumn ? "rectangle.split.3x1" : "rectangle.split.2x1")
-                }
-                .help(model.showsDetailColumn ? "隐藏详情栏" : "显示详情栏")
-                .accessibilityLabel(model.showsDetailColumn ? "隐藏详情栏" : "显示详情栏")
-            }
-        }
     }
 
     // MARK: 播放器覆盖层
@@ -206,8 +202,7 @@ public struct AppShellView: View {
 
 /// 内容栏：根据当前路由展示对应页面。
 ///
-/// 本工单只接占位视图；后续工单把 `switch` 的分支替换成真实页面即可，
-/// 外壳与导航模型不需要改动。
+/// 首页保持挂载以保留数据与滚动位置；其他根页面按路由切换。
 private struct ContentColumnView: View {
     /// 导航模型。
     @Bindable var model: NavigationModel
@@ -215,46 +210,89 @@ private struct ContentColumnView: View {
     /// 当前会话；`nil` 时各页面降级为占位。
     let session: PrismSession?
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
-        content
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        let showsHome = model.rootContentRoute == .home
+
+        ZStack {
+            homeContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(showsHome ? 1 : 0)
+                .allowsHitTesting(showsHome)
+                .accessibilityHidden(!showsHome)
+
+            if !showsHome {
+                routedContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .id(model.rootContentRoute)
+                    .transition(.opacity)
+            }
+
+            if let itemID = model.selectedDetailItemID {
+                DetailContentView(model: model, session: session)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Palette.surface)
+                    .id(itemID)
+                    .transition(
+                        .asymmetric(
+                            insertion: .opacity.combined(with: .offset(x: 24)),
+                            removal: .opacity.combined(with: .offset(x: -12))
+                        )
+                    )
+                    .zIndex(1)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: Motion.standard),
+            value: model.rootContentRoute
+        )
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: Motion.slow),
+            value: model.selectedDetailItemID
+        )
     }
 
     @ViewBuilder
-    private var content: some View {
-        switch model.contentRoute {
-        case .home:
-            if let session {
-                HomeView(
-                    model: HomeViewModel(
-                        dataSource: session.isDemo
-                            ? DemoDataSources.Home()
-                            : session.homeDataSource
-                    ),
-                    // 不传 accessToken：图片走 `EmbyImageLoader` 的鉴权头，
-                    // 令牌不进 URL（详见 `PrismSession.detailDataSource` 的说明）。
-                    imageResolver: HomeImageResolver(
-                        baseURL: session.server.baseURL,
-                        accessToken: nil
-                    ),
-                    onNavigate: { route in model.navigate(to: route) },
-                    onLibrariesLoaded: { libraries in
-                        // 把服务端真实 view id 注入侧边栏：否则点「电影 / 剧集」
-                        // 会用占位 id 发请求，服务器直接返回空库或 404。
-                        for library in libraries {
-                            model.registerLibraryRoute(
-                                .library(
-                                    id: library.id,
-                                    type: LibraryKind(collectionType: library.collectionType)
-                                ),
-                                name: library.name
-                            )
-                        }
+    private var homeContent: some View {
+        if let session {
+            HomeView(
+                model: HomeViewModel(
+                    dataSource: session.isDemo
+                        ? DemoDataSources.Home()
+                        : session.homeDataSource
+                ),
+                // 不传 accessToken：图片走 `EmbyImageLoader` 的鉴权头，令牌不进 URL。
+                imageResolver: HomeImageResolver(
+                    baseURL: session.server.baseURL,
+                    accessToken: nil
+                ),
+                onNavigate: { route in model.navigate(to: route) },
+                onLibrariesLoaded: { libraries in
+                    // 将服务端真实 view id 注入侧边栏，避免用占位 id 发起请求。
+                    for library in libraries {
+                        model.registerLibraryRoute(
+                            .library(
+                                id: library.id,
+                                type: LibraryKind(collectionType: library.collectionType)
+                            ),
+                            name: library.name
+                        )
                     }
-                )
-            } else {
-                HomePlaceholderView()
-            }
+                },
+                isActive: model.rootContentRoute == .home
+            )
+        } else {
+            HomePlaceholderView()
+        }
+    }
+
+    @ViewBuilder
+    private var routedContent: some View {
+        switch model.rootContentRoute {
+        case .home:
+            EmptyView()
         case let .library(id, type):
             if let session {
                 LibraryView(
@@ -269,7 +307,7 @@ private struct ContentColumnView: View {
                         kind: type.mediaKind,
                         includeItemTypes: type.itemTypes
                     ),
-                    libraryName: model.libraryTitle(for: model.contentRoute),
+                    libraryName: model.libraryTitle(for: model.rootContentRoute),
                     countUnit: type.countUnit,
                     selectedItemID: model.selectedDetailItemID,
                     onOpenDetail: { item in model.navigate(to: .detail(itemId: item.id)) },
@@ -319,11 +357,11 @@ private struct ContentColumnView: View {
             SettingsView(
                 selection: $model.settingsTab,
                 server: session?.server,
-                isDemo: session?.isDemo ?? false
+                isDemo: session?.isDemo ?? false,
+                onSwitchServer: { model.isServerSwitcherPresented = true }
             )
         case .detail:
-            // 详情属于详情栏，内容栏不应出现该路由；保底给空态。
-            DetailEmptyView()
+            Color.clear
         case .player:
             // 播放器是覆盖层，内容栏保持原页面。
             Color.clear
@@ -342,10 +380,10 @@ private struct ContentColumnView: View {
     }
 }
 
-// MARK: - 详情栏
+// MARK: - 全宽详情页
 
-/// 详情栏：展示当前选中条目的详情占位，未选中时显示空态。
-private struct DetailColumnView: View {
+/// 在主内容栏中展示当前条目的详情，点击节目后占满内容区域。
+private struct DetailContentView: View {
     /// 导航模型。
     @Bindable var model: NavigationModel
 

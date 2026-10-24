@@ -73,18 +73,13 @@ public struct SeriesDetailView: View {
                     }
 
                     if !content.seasons.isEmpty || !content.episodes.isEmpty {
-                        VStack(alignment: .leading, spacing: Spacing.md) {
-                            HStack(alignment: .firstTextBaseline, spacing: Spacing.md) {
-                                Text("剧集")
-                                    .font(.system(.title3, design: .default, weight: .semibold))
-                                    .foregroundStyle(Palette.textPrimary)
-                                    .accessibilityAddTraits(.isHeader)
-
+                        VStack(alignment: .leading, spacing: PageMetrics.sectionHeaderSpacing) {
+                            PrismSectionHeader("剧集") {
                                 Text(verbatim: seasonSummary(content))
                                     .font(Typography.caption)
                                     .foregroundStyle(Palette.textSecondary)
-
-                                Spacer(minLength: 0)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.trailing)
                             }
 
                             // 季列表拉取失败时不显示选择器（没有季可选），
@@ -135,7 +130,7 @@ public struct SeriesDetailView: View {
                         }
                     }
                 }
-                .padding(.horizontal, Spacing.xl)
+                .padding(.horizontal, PageMetrics.horizontalInset(for: 1000))
                 .padding(.top, Spacing.xl)
                 .padding(.bottom, Spacing.xxl)
             }

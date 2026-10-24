@@ -66,10 +66,17 @@ public final class ConnectViewModel {
     ///   - registry: 服务器记录；默认与登录流程共用同一个 `UserDefaults` 域。
     public init(
         discovery: ServerDiscovery = ServerDiscovery(),
-        registry: ServerRegistry = ServerRegistry()
+        registry: ServerRegistry = ServerRegistry(),
+        initialServer: ServerConnection? = nil,
+        initialUsername: String = ""
     ) {
         self.discovery = discovery
         self.registry = registry
+        if let initialServer {
+            selectedServer = initialServer
+            step = .signingIn
+        }
+        username = initialUsername
     }
 
     // MARK: 第一步

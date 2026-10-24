@@ -63,7 +63,8 @@ public struct HomeImageResolver: Sendable, Hashable {
         kind: ImageKind,
         maxWidth: Int,
         tag: String? = nil,
-        index: Int? = nil
+        index: Int? = nil,
+        itemId: String? = nil
     ) -> URL? {
         guard let baseURL, !item.id.isEmpty else { return nil }
 
@@ -73,7 +74,7 @@ public struct HomeImageResolver: Sendable, Hashable {
 
         var url = baseURL
         url.appendPathComponent("Items")
-        url.appendPathComponent(item.id)
+        url.appendPathComponent(itemId ?? item.id)
         url.appendPathComponent("Images")
         url.appendPathComponent(kind.rawValue)
         if let index {
@@ -102,7 +103,8 @@ public struct HomeImageResolver: Sendable, Hashable {
     ///   - maxWidth: 期望宽度，默认 360（160pt 卡片在 Retina 下的两倍）。
     /// - Returns: 图片地址。
     public func posterURL(for item: MediaItem, maxWidth: Int = 360) -> URL? {
-        url(for: item, kind: .primary, maxWidth: maxWidth)
+        guard let source = item.imageSource(for: .primary) else { return nil }
+        return url(for: item, kind: source.kind, maxWidth: maxWidth, tag: source.tag, itemId: source.itemId)
     }
 
     /// 横向剧照地址（16:9），用于「继续观看」卡片。
@@ -115,8 +117,19 @@ public struct HomeImageResolver: Sendable, Hashable {
     ///   - maxWidth: 期望宽度，默认 640。
     /// - Returns: 图片地址。
     public func backdropURL(for item: MediaItem, maxWidth: Int = 640) -> URL? {
-        url(for: item, kind: .backdrop, maxWidth: maxWidth, index: 0)
-            ?? url(for: item, kind: .primary, maxWidth: maxWidth)
+        // `ImageTags[Backdrop]` 表示单张默认背景，路径不能带 `/0`；只有
+        // `BackdropImageTags` 明确提供多张图片时才使用带 index 的端点。
+        if let source = item.imageSource(for: .backdrop) {
+            return url(
+                for: item,
+                kind: source.kind,
+                maxWidth: maxWidth,
+                tag: source.tag,
+                index: source.index,
+                itemId: source.itemId
+            )
+        }
+        return posterURL(for: item, maxWidth: maxWidth)
     }
 
     /// 缩略图地址（16:9），用于「接下来」与横版卡片。
@@ -128,8 +141,10 @@ public struct HomeImageResolver: Sendable, Hashable {
     ///   - maxWidth: 期望宽度，默认 480。
     /// - Returns: 图片地址。
     public func thumbnailURL(for item: MediaItem, maxWidth: Int = 480) -> URL? {
-        url(for: item, kind: .thumb, maxWidth: maxWidth)
-            ?? url(for: item, kind: .primary, maxWidth: maxWidth)
+        if let source = item.imageSource(for: .thumb) {
+            return url(for: item, kind: source.kind, maxWidth: maxWidth, tag: source.tag, itemId: source.itemId)
+        }
+        return posterURL(for: item, maxWidth: maxWidth)
     }
 
     /// 取条目上对应图片类型的缓存 tag。
@@ -150,6 +165,7 @@ public struct HomeImageResolver: Sendable, Hashable {
             item.imageTags[kind]
         }
     }
+
 }
 
 // MARK: - 环境注入

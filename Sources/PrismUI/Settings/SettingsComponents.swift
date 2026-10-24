@@ -371,16 +371,9 @@ public struct SettingsNote: View {
                 .foregroundStyle(Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(Spacing.sm)
+        .padding(.horizontal, Spacing.xs)
+        .padding(.vertical, Spacing.xs)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .fill(Palette.surfaceElevated.opacity(0.65))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Palette.separator, lineWidth: 1)
-        }
     }
 }
 

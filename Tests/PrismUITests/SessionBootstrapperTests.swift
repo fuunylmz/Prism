@@ -29,6 +29,44 @@ struct SessionBootstrapperTests {
         func deleteAll(service: String) throws {}
     }
 
+    private final class ToggleFailingSecureStore: SecureStoring, @unchecked Sendable {
+        private let lock = NSLock()
+        private let backing = InMemorySecureStore()
+        private var _failsWrites = false
+
+        var failsWrites: Bool {
+            get {
+                lock.lock()
+                defer { lock.unlock() }
+                return _failsWrites
+            }
+            set {
+                lock.lock()
+                defer { lock.unlock() }
+                _failsWrites = newValue
+            }
+        }
+
+        func save(_ data: Data, account: String, service: String) throws {
+            if failsWrites {
+                throw SessionStoreError.file(code: 513, operation: .write)
+            }
+            try backing.save(data, account: account, service: service)
+        }
+
+        func load(account: String, service: String) throws -> Data? {
+            try backing.load(account: account, service: service)
+        }
+
+        func delete(account: String, service: String) throws {
+            try backing.delete(account: account, service: service)
+        }
+
+        func deleteAll(service: String) throws {
+            try backing.deleteAll(service: service)
+        }
+    }
+
     /// 在**非隔离**上下文里造一个服务器注册表。
     ///
     /// `UserDefaults` 不是 `Sendable`，而本套件是 `@MainActor`（`SessionBootstrapper`
@@ -232,5 +270,203 @@ struct SessionBootstrapperTests {
         #expect(await registry.servers().count == 1)
         // 但没有 token：下次必须重新输密码。
         #expect(try await bootstrapper.store.loadAll().isEmpty)
+    }
+
+    @Test("切换服务器后更新运行时会话和重启默认服务器")
+    func switchingServerReauthenticatesAndUpdatesActiveCredential() async throws {
+        let suite = "test.prism.bootstrap.switch.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let store = CredentialStore(secureStore: InMemorySecureStore())
+        let registry = try Self.makeRegistry(suiteName: suite)
+        let first = try makeServer()
+        let second = ServerConnection(
+            id: "srv-second",
+            name: "书房 Emby",
+            baseURL: try #require(URL(string: "https://study.example.com"))
+        )
+        let bootstrapper = SessionBootstrapper(
+            store: store,
+            registry: registry,
+            authenticate: { server, username, _ in
+                AuthSession(
+                    serverId: server.id,
+                    userId: "user-\(server.id)",
+                    accessToken: "token-\(server.id)",
+                    user: EmbyUser(id: "user-\(server.id)", name: username, serverId: server.id)
+                )
+            }
+        )
+
+        await bootstrapper.signedIn(
+            server: first,
+            auth: AuthSession(
+                serverId: first.id,
+                userId: "user-first",
+                accessToken: "token-first",
+                user: EmbyUser(id: "user-first", name: "Alice", serverId: first.id)
+            ),
+            username: "alice",
+            password: "first-password"
+        )
+        await registry.upsert(second)
+        try await store.save(StoredCredential(
+            serverId: second.id,
+            userId: "old-user",
+            username: "bob",
+            password: "second-password",
+            lastSignedInAt: Date()
+        ))
+
+        #expect(await bootstrapper.switchServer(id: second.id))
+        guard case let .ready(session) = bootstrapper.phase else {
+            Issue.record("成功切换后应进入目标服务器会话")
+            return
+        }
+        #expect(session.server.id == second.id)
+        #expect(session.session.accessToken == "token-\(second.id)")
+        #expect(try await store.active()?.serverId == second.id)
+        #expect(await registry.lastActiveServerId == second.id)
+        #expect(try await store.credential(serverId: second.id, userId: "user-\(second.id)")?.username == "bob")
+    }
+
+    @Test("远端认证成功但本地保存失败时仍切换当前会话")
+    func switchingServerContinuesWhenPersistenceFails() async throws {
+        let suite = "test.prism.bootstrap.switch-persistence-failure.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let first = try makeServer()
+        let second = ServerConnection(
+            id: "srv-persistence-failure",
+            name: "备用 Emby",
+            baseURL: try #require(URL(string: "https://backup.example.com"))
+        )
+        let secure = ToggleFailingSecureStore()
+        let store = CredentialStore(secureStore: secure)
+        let registry = try Self.makeRegistry(suiteName: suite)
+        let bootstrapper = SessionBootstrapper(
+            store: store,
+            registry: registry,
+            authenticate: { server, username, _ in
+                AuthSession(
+                    serverId: server.id,
+                    userId: "user-\(server.id)",
+                    accessToken: "token-\(server.id)",
+                    user: EmbyUser(id: "user-\(server.id)", name: username, serverId: server.id)
+                )
+            }
+        )
+
+        await bootstrapper.signedIn(
+            server: first,
+            auth: makeAuthSession(),
+            username: "alice",
+            password: "first-password"
+        )
+        await registry.upsert(second)
+        try await store.save(StoredCredential(
+            serverId: second.id,
+            userId: "old-user",
+            username: "bob",
+            password: "second-password",
+            lastSignedInAt: Date()
+        ))
+        secure.failsWrites = true
+
+        #expect(await bootstrapper.switchServer(id: second.id))
+        guard case let .ready(session) = bootstrapper.phase else {
+            Issue.record("本地保存失败时本次已认证会话仍应可用")
+            return
+        }
+        #expect(session.server.id == second.id)
+        #expect(session.session.accessToken == "token-\(second.id)")
+        #expect(bootstrapper.persistenceFailure?.contains("513") == true)
+        #expect(await registry.lastActiveServerId == second.id)
+    }
+
+    @Test("目标服务器认证失败时保留当前会话")
+    func failedSwitchKeepsCurrentSession() async throws {
+        let suite = "test.prism.bootstrap.switch-failure.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let first = try makeServer()
+        let second = ServerConnection(
+            id: "srv-offline",
+            name: "离线 Emby",
+            baseURL: try #require(URL(string: "https://offline.example.com"))
+        )
+        let store = CredentialStore(secureStore: InMemorySecureStore())
+        let registry = try Self.makeRegistry(suiteName: suite)
+        let bootstrapper = SessionBootstrapper(
+            store: store,
+            registry: registry,
+            authenticate: { server, _, _ in
+                if server.id == second.id { throw EmbyError.serverUnreachable("offline") }
+                return AuthSession(
+                    serverId: server.id,
+                    userId: "user-\(server.id)",
+                    accessToken: "token-\(server.id)",
+                    user: EmbyUser(id: "user-\(server.id)", name: "Alice", serverId: server.id)
+                )
+            }
+        )
+
+        await bootstrapper.signedIn(
+            server: first,
+            auth: makeAuthSession(),
+            username: "alice",
+            password: "first-password"
+        )
+        await registry.upsert(second)
+        try await store.save(StoredCredential(
+            serverId: second.id,
+            userId: "user-offline",
+            username: "bob",
+            password: "second-password"
+        ))
+
+        #expect(await bootstrapper.switchServer(id: second.id) == false)
+        guard case let .ready(session) = bootstrapper.phase else {
+            Issue.record("切换失败时应保留当前会话")
+            return
+        }
+        #expect(session.server.id == first.id)
+        #expect(bootstrapper.persistenceFailure?.contains("无法连接") == true)
+    }
+
+    @Test("没有目标凭据时预选服务器登录，取消后恢复当前会话")
+    func missingCredentialOpensTargetLoginAndCanReturn() async throws {
+        let suite = "test.prism.bootstrap.switch-login.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let first = try makeServer()
+        let second = ServerConnection(
+            id: "srv-new",
+            name: "新服务器",
+            baseURL: try #require(URL(string: "https://new.example.com"))
+        )
+        let registry = try Self.makeRegistry(suiteName: suite)
+        let bootstrapper = SessionBootstrapper(
+            store: CredentialStore(secureStore: InMemorySecureStore()),
+            registry: registry,
+            authenticate: Self.stubAuth(server: first)
+        )
+        await bootstrapper.signedIn(
+            server: first,
+            auth: makeAuthSession(),
+            username: "alice",
+            password: "first-password"
+        )
+        await registry.upsert(second)
+
+        #expect(await bootstrapper.switchServer(id: second.id) == false)
+        if case .needsConnection = bootstrapper.phase {} else {
+            Issue.record("无凭据的目标服务器应进入连接流程")
+        }
+        #expect(bootstrapper.pendingConnectionServer?.id == second.id)
+        #expect(bootstrapper.canCancelConnection)
+
+        bootstrapper.cancelConnection()
+        guard case let .ready(session) = bootstrapper.phase else {
+            Issue.record("取消登录后应恢复原会话")
+            return
+        }
+        #expect(session.server.id == first.id)
     }
 }

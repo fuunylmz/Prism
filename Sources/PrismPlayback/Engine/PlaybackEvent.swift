@@ -44,7 +44,6 @@ public struct PlaybackFailure: Error, Sendable, Equatable, Hashable {
         self.isRecoverable = isRecoverable
     }
 }
-
 extension PlaybackFailure: LocalizedError {
     /// 面向用户的描述（当前直接用 `message`，本地化文案由 UI 层负责）。
     public var errorDescription: String? { message }
@@ -206,6 +205,8 @@ public struct SubtitleCue: Sendable, Equatable, Identifiable {
         case text(String)
         /// 富文本（行内颜色 / 粗体 / 字体…）。
         case richText([TextRun])
+        /// 已解码的图形字幕（PGS / DVB / DVD）。
+        case image(SubtitleBitmap)
     }
 
     /// 作者指定的位置（ASS `\an` / `\pos`）。
@@ -257,7 +258,13 @@ public struct SubtitleCue: Sendable, Equatable, Identifiable {
         switch body {
         case .text(let string): return string
         case .richText(let runs): return runs.map(\.text).joined()
+        case .image: return nil
         }
+    }
+
+    /// 返回当前播放时刻正在显示的字幕 cue，结束时刻不包含在内。
+    public static func active(at position: Ticks, in cues: [SubtitleCue]) -> [SubtitleCue] {
+        cues.filter { $0.start <= position && position < $0.end }
     }
 
     /// 施加字幕延迟，返回偏移后的 cue。
@@ -282,5 +289,37 @@ public struct SubtitleCue: Sendable, Equatable, Identifiable {
             body: body,
             placement: placement
         )
+    }
+}
+
+/// 以 PNG 值保存的图形字幕帧，避免在播放事件里泄漏 `CGImage` 类型。
+public struct SubtitleBitmap: Sendable, Equatable {
+    public let pngData: Data
+    public let x: Double
+    public let y: Double
+    public let width: Double
+    public let height: Double
+    public let canvasWidth: Double
+    public let canvasHeight: Double
+    public let isForced: Bool
+
+    public init(
+        pngData: Data,
+        x: Double,
+        y: Double,
+        width: Double,
+        height: Double,
+        canvasWidth: Double,
+        canvasHeight: Double,
+        isForced: Bool = false
+    ) {
+        self.pngData = pngData
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.canvasWidth = canvasWidth
+        self.canvasHeight = canvasHeight
+        self.isForced = isForced
     }
 }

@@ -63,6 +63,46 @@ struct EngineEventTests {
         #expect(PlaybackEvent.subtitleCues([cue]) != .subtitleCues([otherText]))
     }
 
+    @Test("字幕只在起始时刻含、结束时刻不含的区间内显示")
+    func activeSubtitleCues() {
+        let first = SubtitleCue(id: 1, start: Ticks(seconds: 1), end: Ticks(seconds: 2), body: .text("first"))
+        let second = SubtitleCue(id: 2, start: Ticks(seconds: 2), end: Ticks(seconds: 3), body: .text("second"))
+
+        #expect(SubtitleCue.active(at: Ticks(seconds: 0.99), in: [first, second]).isEmpty)
+        #expect(SubtitleCue.active(at: Ticks(seconds: 1), in: [first, second]).map(\.id) == [1])
+        #expect(SubtitleCue.active(at: Ticks(seconds: 2), in: [first, second]).map(\.id) == [2])
+        #expect(SubtitleCue.active(at: Ticks(seconds: 3), in: [first, second]).isEmpty)
+    }
+
+    @Test("位图字幕 cue 保留图像与源画布几何")
+    func bitmapSubtitleCue() {
+        let bitmap = SubtitleBitmap(
+            pngData: Data([1, 2, 3]),
+            x: 0.1,
+            y: 0.8,
+            width: 0.8,
+            height: 0.1,
+            canvasWidth: 1920,
+            canvasHeight: 1080,
+            isForced: true
+        )
+        let cue = SubtitleCue(
+            id: 4,
+            start: Ticks(seconds: 1),
+            end: Ticks(seconds: 2),
+            body: .image(bitmap)
+        )
+
+        #expect(cue.text == nil)
+        #expect(SubtitleCue.active(at: Ticks(seconds: 1.5), in: [cue]) == [cue])
+        #expect(cue == SubtitleCue(
+            id: 4,
+            start: Ticks(seconds: 1),
+            end: Ticks(seconds: 2),
+            body: .image(bitmap)
+        ))
+    }
+
     @Test("PlaybackState 的终态 / 活跃判定")
     func statePredicates() {
         #expect(PlaybackState.idle.isTerminal == false)

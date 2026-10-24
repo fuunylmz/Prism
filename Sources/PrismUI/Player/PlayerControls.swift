@@ -133,16 +133,28 @@ public struct PlayerControls: View {
 
     /// 一行控制：左侧播放控制、中间时间、右侧开关与菜单。
     private var controlsRow: some View {
-        ZStack {
-            HStack(spacing: Spacing.xs) {
-                playbackButtons
-                Spacer(minLength: Spacing.lg)
-                trailingButtons
-            }
+        ViewThatFits(in: .horizontal) {
+            ZStack {
+                HStack(spacing: Spacing.xs) {
+                    playbackButtons
+                    Spacer(minLength: Spacing.lg)
+                    trailingButtons
+                }
 
-            timeDisplay
+                timeDisplay
+            }
+            .frame(height: 32)
+
+            VStack(spacing: Spacing.xs) {
+                timeDisplay
+                HStack(spacing: Spacing.xs) {
+                    playbackButtons
+                    Spacer(minLength: Spacing.lg)
+                    trailingButtons
+                }
+            }
+            .frame(minHeight: 58)
         }
-        .frame(height: 32)
     }
 
     /// 左侧：播放 / 暂停、上一集、下一集。

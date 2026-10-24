@@ -8,10 +8,8 @@ import SwiftUI
 ///
 /// ## 为什么这里没有「服务器地址输入框」
 ///
-/// v1.0 的连接流程是「添加服务器 → 登录」（欢迎页 / 服务器胶囊），设置里只做**只读回显**
-/// 与**连通性诊断**。多服务器管理（重命名 / 设为默认 / 删除）属于 v1.1，见
-/// `docs/research/ux-benchmark.md` §S15；现在给出可用的「切换服务器」按钮，
-/// 但真正的切换入口仍然是侧边栏底部的服务器胶囊，避免两套切换逻辑打架。
+/// 连接流程是「添加服务器 → 登录」（欢迎页 / 服务器胶囊），设置里提供当前服务器回显、
+/// 连通性诊断和已有服务器切换入口。
 ///
 /// ## 连接测试
 ///
@@ -73,7 +71,7 @@ struct NetworkSettingsView: View {
                     .foregroundStyle(Palette.textSecondary)
             }
 
-            SettingsRow("切换服务器", description: "v1.0 只保存一台服务器；多服务器管理将在 v1.1 提供。") {
+            SettingsRow("切换服务器", description: "切换到已保存登录信息的服务器。") {
                 Button("切换服务器…") {
                     onSwitchServer?()
                 }
@@ -326,7 +324,7 @@ enum ConnectionTestState: Equatable {
 /// 服务器面板：当前连接信息 + 切换入口 + 版本范围说明。
 ///
 /// 与网络面板的分工：网络面板偏「诊断」（连通性、超时），本面板偏「身份」
-/// （连的是哪台服务器、哪个用户、是否演示模式）。多服务器管理属于 v1.1。
+/// （连的是哪台服务器、哪个用户、是否演示模式）。
 struct ServerSettingsView: View {
     /// 当前服务器。
     let server: ServerConnection?
@@ -367,7 +365,7 @@ struct ServerSettingsView: View {
                 }
             }
 
-            SettingsNote("v1.0 只保存一台服务器。添加 / 重命名 / 设为默认 / 删除服务器，以及多服务器并行登录，属于 v1.1 范围。")
+            SettingsNote("服务器地址和登录状态会分别保存。切换服务器会重新认证并刷新媒体库。")
         }
     }
 

@@ -23,7 +23,7 @@ struct HomePlaceholder: View {
     private let railCounts = [4, 5, 6]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.xl) {
+        VStack(alignment: .leading, spacing: PageMetrics.sectionSpacing) {
             continueWatchingRail
             episodeRail
             posterRail
@@ -132,7 +132,8 @@ struct HomePlaceholder: View {
 #Preview("首页骨架 · 深色（加载中）") {
     ScrollView(.vertical) {
         HomePlaceholder()
-            .padding(Spacing.xl)
+            .padding(.horizontal, PageMetrics.horizontalInset(for: 1000))
+            .padding(.vertical, Spacing.xl)
     }
     .frame(width: 1000, height: 760)
     .background(Palette.surface)
@@ -142,7 +143,8 @@ struct HomePlaceholder: View {
 #Preview("首页骨架 · 浅色（加载中）") {
     ScrollView(.vertical) {
         HomePlaceholder()
-            .padding(Spacing.xl)
+            .padding(.horizontal, PageMetrics.horizontalInset(for: 700))
+            .padding(.vertical, Spacing.xl)
     }
     .frame(width: 700, height: 620)
     .background(Palette.surface)

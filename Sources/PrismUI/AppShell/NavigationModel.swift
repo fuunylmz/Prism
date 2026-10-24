@@ -40,11 +40,11 @@ public enum ServerStatus: String, Hashable, Sendable, CaseIterable {
 
 /// 应用外壳的导航状态。
 ///
-/// 这是三栏 `NavigationSplitView` 的唯一状态源，负责：
+/// 这是应用外壳的唯一导航状态源，负责：
 /// - 侧边栏选中项（``selection``）与内容栏路由（``contentRoute``）；
-/// - 详情栏栈（``detailPath``）与返回；
+/// - 详情页栈（``detailPath``）与返回；
 /// - 播放器覆盖层（``isPlayerPresented``）；
-/// - 列可见性（``columnVisibility`` / ``showsDetailColumn``）；
+/// - 侧边栏可见性（``isSidebarVisible``）；
 /// - 当前服务器与用户（供服务器胶囊展示与切换）。
 ///
 /// **边界**：本类型只依赖 SwiftUI 与 PrismCore，不持有 `EmbyClient`、
@@ -60,15 +60,10 @@ public final class NavigationModel {
     /// 侧边栏当前选中项。`nil` 表示未选中（启动时默认 ``SidebarItem/home``）。
     public var selection: SidebarItem?
 
-    /// 三栏的列可见性。
-    ///
-    /// 注意：在**三栏** `NavigationSplitView` 中，`.doubleColumn` 表示
-    /// 「内容栏 + 详情栏」（隐藏侧边栏），而不是「侧边栏 + 内容栏」。因此外壳
-    /// **不**用 `.doubleColumn` 隐藏详情栏，而是用 ``showsDetailColumn``
-    /// 把详情栏宽度收为 0；`columnVisibility` 只用于侧边栏的显示 / 隐藏。
-    public var columnVisibility: NavigationSplitViewVisibility
+    /// 侧边栏是否显示。
+    public var isSidebarVisible: Bool
 
-    /// 详情栏的导航栈。空表示未选中任何条目（显示空态）。
+    /// 详情页的导航栈。空表示当前展示一级内容，非空表示主内容栏展示详情。
     public var detailPath: [Route]
 
     /// 播放器覆盖层是否可见。
@@ -85,7 +80,7 @@ public final class NavigationModel {
 
     // MARK: 服务器与用户
 
-    /// 已保存的服务器列表（v1.0 通常只有一台）。
+    /// 已保存的服务器列表。
     public var servers: [ServerConnection]
 
     /// 当前服务器 id；`nil` 时取 ``servers`` 的第一台。
@@ -122,12 +117,17 @@ public final class NavigationModel {
     /// 退出登录请求。认证模块接入后由上层赋值。
     public var onSignOut: (() -> Void)?
 
+    /// 切换服务器请求。由根层负责重新认证并重建 ``PrismSession``。
+    public var onSelectServer: ((String) -> Void)?
+    /// 添加服务器请求。
+    public var onAddServer: (() -> Void)?
+
     // MARK: 布局状态
 
     /// 窗口内容宽度（由 ``AppShellView`` 通过 `onGeometryChange` 回写）。
     public private(set) var windowWidth: CGFloat
 
-    /// 用户是否手动折叠了详情栏（工具栏按钮 / 显示菜单）。
+    /// 保留的布局兼容状态；详情页不再单独占列。
     public var isDetailColumnCollapsed: Bool
 
     /// 请求聚焦搜索框的计数器；每次自增，视图监听后把焦点交给搜索框。
@@ -141,10 +141,7 @@ public final class NavigationModel {
 
     // MARK: 常量
 
-    /// 详情栏自动折叠的窗口宽度阈值。
-    ///
-    /// 低于该宽度时三栏放不下（侧边栏 220 + 内容栏 480 + 详情栏 420），
-    /// 自动隐藏详情栏，保留返回按钮（见 `docs/research/ux-benchmark.md` §4.1）。
+    /// 旧版详情列的宽度阈值，保留以兼容外部调用。
     public static let detailColumnMinimumWindowWidth: CGFloat = 1040
 
     // MARK: 初始化
@@ -163,7 +160,7 @@ public final class NavigationModel {
         currentUser: EmbyUser? = nil
     ) {
         self.selection = selection
-        self.columnVisibility = .all
+        self.isSidebarVisible = true
         self.detailPath = []
         self.isPlayerPresented = false
         self.playerRoute = nil
@@ -177,6 +174,8 @@ public final class NavigationModel {
         self.libraryRoutes = [:]
         self.activeRootRoute = nil
         self.libraryNames = [:]
+        self.onSelectServer = nil
+        self.onAddServer = nil
         self.windowWidth = 1280
         self.isDetailColumnCollapsed = false
         self.searchFocusRequest = 0
@@ -189,10 +188,26 @@ public final class NavigationModel {
     ///
     /// 设置页需要保留用户选中的 tab，因此不能直接使用 `selection.route`。
     public var contentRoute: Route {
+        // 详情页复用主内容栏，不再占用第三列。根路由仍保留在
+        // `activeRootRoute` / `selection` 中，返回时只需弹出这一层即可。
+        if let detail = detailPath.last {
+            return detail
+        }
+
         if let activeRootRoute {
             return activeRootRoute
         }
 
+        guard let selection else { return .home }
+        switch selection {
+        case .settings: return .settings(settingsTab)
+        default: return route(for: selection)
+        }
+    }
+
+    /// 当前主页面路由；详情以覆盖层显示时保持原页面不变。
+    public var rootContentRoute: Route {
+        if let activeRootRoute { return activeRootRoute }
         guard let selection else { return .home }
         switch selection {
         case .settings: return .settings(settingsTab)
@@ -264,36 +279,22 @@ public final class NavigationModel {
         isPlayerPresented || !detailPath.isEmpty
     }
 
-    /// 当前路由是否支持详情栏（只有媒体库支持）。
+    /// 兼容旧菜单接口；详情页现在直接占满内容栏，因此没有可切换的详情栏。
     public var canToggleDetailColumn: Bool {
-        contentRoute.showsDetailColumn
+        false
     }
 
-    /// 详情栏此刻是否应该显示。
-    ///
-    /// 规则：
-    /// - 路由本身要支持详情栏，且用户没有手动折叠；
-    /// - 窗口足够宽（≥ ``detailColumnMinimumWindowWidth``）时自动显示；
-    /// - **窗口偏窄但用户已经明确打开某条详情时仍然显示**。
-    ///   最后一条是必要的：窗口最小宽度是 960，而自动显示的阈值是 1040，
-    ///   中间这 80pt 里点任何海报都会「没有任何反应」——详情写进了 `detailPath`，
-    ///   但详情栏宽度被收成 0，用户看不到任何变化，也没有提示。
+    /// 兼容旧布局状态查询；当前详情页始终在内容栏展示。
     public var showsDetailColumn: Bool {
-        guard canToggleDetailColumn, !isDetailColumnCollapsed else { return false }
-        if !detailPath.isEmpty { return true }
-        return windowWidth >= Self.detailColumnMinimumWindowWidth
+        false
     }
 
-    /// 窗口是否处于「放不下三栏」的紧凑宽度。
+    /// 窗口是否处于旧版详情列的紧凑宽度。
     public var isCompactWidth: Bool {
         windowWidth < Self.detailColumnMinimumWindowWidth
     }
 
     /// 侧边栏是否可见。
-    public var isSidebarVisible: Bool {
-        columnVisibility == .all
-    }
-
     /// 详情栏当前栈顶的条目 id（用于详情占位视图）。
     public var selectedDetailItemID: String? {
         detailPath.last?.detailItemID
@@ -310,7 +311,7 @@ public final class NavigationModel {
 
     // MARK: 导航
 
-    /// 选中侧边栏导航项，并按 IA 规则更新内容栏与详情栏。
+    /// 选中侧边栏导航项，并按 IA 规则更新内容栏与详情页。
     ///
     /// 禁用项（v1.0 的下载）会被忽略。
     ///
@@ -329,9 +330,7 @@ public final class NavigationModel {
     /// 规则：
     /// - 一级导航（首页 / 媒体库 / 搜索 / 下载 / 设置）会替换内容栏根视图，
     ///   并清空详情栈（侧边栏切换不 push）；
-    /// - ``Route/detail(itemId:)`` 会替换详情栈为单条详情，**仅在当前路由有详情栏时生效**
-    ///   （首页 / 搜索 / 设置是 `.doubleColumn`，没有第三栏可放详情；搜索结果的条目
-    ///   应由搜索工单在内容栏内 push，而不是走详情栏）；
+    /// - ``Route/detail(itemId:)`` 会替换详情栈为单条详情，并在主内容栏全宽展示；
     /// - ``Route/player(itemId:mediaSourceId:resumeAt:)`` 会打开播放器覆盖层。
     ///
     /// - Parameter route: 目标路由。
@@ -358,22 +357,19 @@ public final class NavigationModel {
             activeRootRoute = route
             detailPath = []
         case .detail:
-            guard canToggleDetailColumn else { return }
             detailPath = [route]
-            // 用户主动打开详情时，确保详情栏没有被折叠掉。
             isDetailColumnCollapsed = false
         case let .player(itemId, mediaSourceId, resumeAt):
             presentPlayer(itemId: itemId, mediaSourceId: mediaSourceId, resumeAt: resumeAt)
         }
     }
 
-    /// 在详情栏压入一条详情（用于「更多相似」「查看全部」等后续工单）。
+    /// 压入一条详情（用于「更多相似」「查看全部」等后续工单）。
     ///
-    /// 与 ``navigate(to:)`` 一样，只有当前路由带详情栏时才生效。
+    /// 与 ``navigate(to:)`` 一样，详情页会在主内容栏展示。
     ///
     /// - Parameter itemId: 条目 id。
     public func pushDetail(itemId: String) {
-        guard canToggleDetailColumn else { return }
         detailPath.append(.detail(itemId: itemId))
         isDetailColumnCollapsed = false
     }
@@ -409,7 +405,7 @@ public final class NavigationModel {
         isPlayerPresented = true
     }
 
-    /// 关闭播放器覆盖层，回到原来的三栏界面。
+    /// 关闭播放器覆盖层，回到原来的内容界面。
     public func dismissPlayer() {
         isPlayerPresented = false
         playerRoute = nil
@@ -451,15 +447,14 @@ public final class NavigationModel {
 
     /// 切换侧边栏显示 / 隐藏。
     ///
-    /// 三栏 `NavigationSplitView` 中 `.doubleColumn` 即「隐藏侧边栏」。
+    /// 显示或隐藏固定宽度的侧栏。
     public func toggleSidebar() {
-        columnVisibility = columnVisibility == .all ? .doubleColumn : .all
+        isSidebarVisible.toggle()
     }
 
-    /// 切换详情栏显示 / 隐藏（仅媒体库路由可用）。
+    /// 旧版详情栏切换接口；当前详情页始终占满内容栏。
     public func toggleDetailColumn() {
-        guard canToggleDetailColumn else { return }
-        isDetailColumnCollapsed.toggle()
+        // 详情页已经是内容栏内的全宽页面，保留方法以兼容菜单/外部调用。
     }
 
     /// 窗口宽度变化时由视图回写。
@@ -480,6 +475,25 @@ public final class NavigationModel {
     /// - Parameter serverID: 目标服务器 id；不存在时忽略。
     public func selectServer(id serverID: String) {
         guard servers.contains(where: { $0.id == serverID }) else { return }
+        guard serverID != currentServerID else {
+            isServerSwitcherPresented = false
+            return
+        }
+        guard !serverStates.values.contains(.connecting) else { return }
+        // 有运行时切换回调时，先保持当前会话和内容不变，等待根层认证成功后
+        // 用新的 PrismSession 重建外壳；否则会出现胶囊显示 B、请求仍发往 A 的错配。
+        if let onSelectServer {
+            serverStates[serverID] = .connecting
+            isServerSwitcherPresented = false
+            onSelectServer(serverID)
+            return
+        }
+
+        applyServerSelection(serverID)
+        isServerSwitcherPresented = false
+    }
+
+    private func applyServerSelection(_ serverID: String) {
         currentServerID = serverID
         selection = .home
         detailPath = []
@@ -488,7 +502,18 @@ public final class NavigationModel {
         activeRootRoute = nil
         libraryRoutes = [:]
         libraryNames = [:]
-        isServerSwitcherPresented = false
+    }
+
+    /// 在运行时服务器认证成功后提交导航状态。
+    public func completeServerSelection(id serverID: String) {
+        guard servers.contains(where: { $0.id == serverID }) else { return }
+        serverStates[serverID] = .connected
+        applyServerSelection(serverID)
+    }
+
+    /// 标记服务器切换失败，当前服务器与会话保持不变。
+    public func failServerSelection(id serverID: String, status: ServerStatus = .offline) {
+        serverStates[serverID] = status
     }
 
     /// 打开设置窗口 / 面板。

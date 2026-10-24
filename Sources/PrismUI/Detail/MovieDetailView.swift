@@ -48,71 +48,476 @@ public struct MovieDetailView: View {
     // MARK: 有数据
 
     private func loadedBody(_ content: DetailContent) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                CinematicHeader(
-                    item: content.item,
-                    backdropURL: model.headerImageURL(for: content.item),
-                    logoURL: model.logoImageURL(for: content.item)
-                )
+        DetailPageScaffold(
+            header: CinematicHeader(
+                item: content.item,
+                backdropURL: model.headerImageURL(for: content.item),
+                logoURL: model.logoImageURL(for: content.item)
+            )
+        ) {
+            VStack(alignment: .leading, spacing: PageMetrics.sectionSpacing) {
+                VStack(alignment: .leading, spacing: Spacing.md) {
+                    DetailActionRow(
+                        content: content,
+                        isUpdatingPlayed: model.isUpdatingPlayed,
+                        isUpdatingFavorite: model.isUpdatingFavorite,
+                        onPlay: { actions.play($0) },
+                        onTogglePlayed: { Task { await model.togglePlayed() } },
+                        onToggleFavorite: { Task { await model.toggleFavorite() } },
+                        onRefresh: { Task { await model.load() } }
+                    )
 
-                VStack(alignment: .leading, spacing: Spacing.xxl) {
-                    VStack(alignment: .leading, spacing: Spacing.md) {
-                        DetailActionRow(
-                            content: content,
-                            isUpdatingPlayed: model.isUpdatingPlayed,
-                            isUpdatingFavorite: model.isUpdatingFavorite,
-                            onPlay: { actions.play($0) },
-                            onTogglePlayed: { Task { await model.togglePlayed() } },
-                            onToggleFavorite: { Task { await model.toggleFavorite() } },
-                            onRefresh: { Task { await model.load() } }
-                        )
-
-                        if let error = model.actionError {
-                            DetailActionErrorBanner(error: error) { model.clearActionError() }
-                        }
+                    if let error = model.actionError {
+                        DetailActionErrorBanner(error: error) { model.clearActionError() }
                     }
+                }
 
-                    if let overview = content.item.overview, !overview.isEmpty {
-                        DetailOverview(text: overview)
-                    }
+                if let overview = content.item.overview, !overview.isEmpty {
+                    DetailOverview(text: overview)
+                }
 
-                    if !content.people.isEmpty {
-                        DetailSection(title: "演职员") {
-                            CastRow(people: content.people) { person in
-                                model.avatarImageURL(for: person)
-                            }
-                        }
-                    }
-
-                    if !content.similar.isEmpty {
-                        DetailSection(title: "相似推荐") {
-                            DetailSimilarRow(
-                                items: content.similar,
-                                imageURL: { model.posterImageURL(for: $0) },
-                                onPlay: { item in
-                                    actions.play(
-                                        DetailPlaybackRequest(
-                                            itemId: item.id,
-                                            resumeAt: item.userData.played
-                                                ? .zero
-                                                : item.userData.playbackPosition
-                                        )
-                                    )
-                                },
-                                onSelect: { actions.openItem($0.id) }
-                            )
+                if !content.people.isEmpty {
+                    DetailSection(title: "演职员") {
+                        CastRow(people: content.people) { person in
+                            model.avatarImageURL(for: person)
                         }
                     }
                 }
-                .padding(.horizontal, Spacing.xl)
-                .padding(.top, Spacing.xl)
-                .padding(.bottom, Spacing.xxl)
+
+                if !content.similar.isEmpty {
+                    DetailSection(title: "相似推荐") {
+                        DetailSimilarRow(
+                            items: content.similar,
+                            imageURL: { model.posterImageURL(for: $0) },
+                            onPlay: { item in
+                                actions.play(
+                                    DetailPlaybackRequest(
+                                        itemId: item.id,
+                                        resumeAt: item.userData.played
+                                            ? .zero
+                                            : item.userData.playbackPosition
+                                    )
+                                )
+                            },
+                            onSelect: { actions.openItem($0.id) }
+                        )
+                    }
+                }
             }
         }
     }
 }
 
+// MARK: - 操作按钮行
+
+/// 播放 / 已看 / 收藏 / 更多。
+///
+/// 电影与剧集共用：主按钮的文案由 ``DetailContent/primaryPlayback`` 决定
+/// （「播放」/「从 12:34 继续」/「继续观看 S2E5」…），剧集不需要另一套按钮。
+struct DetailActionRow: View {
+    let content: DetailContent
+    let isUpdatingPlayed: Bool
+    let isUpdatingFavorite: Bool
+    let onPlay: (DetailPlaybackRequest) -> Void
+    let onTogglePlayed: () -> Void
+    let onToggleFavorite: () -> Void
+    let onRefresh: () -> Void
+
+    private var isPlayed: Bool { content.item.userData.played }
+    private var isFavorite: Bool { content.item.userData.isFavorite }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Spacing.md) {
+                playButton(playLabel)
+                playedButton(showsTitle: true)
+                favoriteButton(showsTitle: true)
+                moreMenu
+                Spacer(minLength: 0)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+
+            HStack(spacing: Spacing.md) {
+                playButton(compactPlayLabel)
+                Spacer(minLength: 0)
+                playedButton(showsTitle: false)
+                favoriteButton(showsTitle: false)
+                moreMenu
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func playButton(_ label: LocalizedStringKey) -> some View {
+        PrismPrimaryButton(label, systemImage: "play.fill") {
+            play()
+        }
+        .disabled(content.primaryPlaybackItem == nil)
+        .help(playHelp)
+    }
+
+    private func playedButton(showsTitle: Bool) -> some View {
+        DetailToggleButton(
+            systemImage: isPlayed ? "checkmark.circle.fill" : "checkmark.circle",
+            title: isPlayed ? "已看" : "标记已看",
+            isOn: isPlayed,
+            isBusy: isUpdatingPlayed,
+            showsTitle: showsTitle,
+            action: onTogglePlayed
+        )
+    }
+
+    private func favoriteButton(showsTitle: Bool) -> some View {
+        DetailToggleButton(
+            systemImage: isFavorite ? "heart.fill" : "heart",
+            title: isFavorite ? "已收藏" : "收藏",
+            isOn: isFavorite,
+            isBusy: isUpdatingFavorite,
+            showsTitle: showsTitle,
+            action: onToggleFavorite
+        )
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            Button("复制标题", systemImage: "doc.on.doc") {
+                copyTitle()
+            }
+            Button("刷新详情", systemImage: "arrow.clockwise", action: onRefresh)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Palette.textPrimary)
+                .frame(width: 18, height: 18)
+                .padding(6)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("更多")
+        .accessibilityLabel(Text("更多"))
+    }
+
+    // MARK: 主按钮文案
+
+    private var playLabel: LocalizedStringKey {
+        switch content.primaryPlayback {
+        case .play:
+            return "播放"
+        case let .resume(position):
+            return "从 \(position.formatted) 继续"
+        case .rewatch:
+            return "重新播放"
+        case let .continueEpisode(episode):
+            if let code = content.episodeCode(for: episode) {
+                return "继续观看 \(code)"
+            }
+            return "继续观看"
+        case let .restartSeries(episode):
+            if let code = content.episodeCode(for: episode) {
+                return "重新观看 \(code)"
+            }
+            return "重新观看"
+        }
+    }
+
+    private var compactPlayLabel: LocalizedStringKey {
+        switch content.primaryPlayback {
+        case .play:
+            return "播放"
+        case .resume, .continueEpisode:
+            return "继续"
+        case .rewatch, .restartSeries:
+            return "重播"
+        }
+    }
+
+    /// 主按钮的 tooltip：剧集显示「S2E5 · 集名」，悬停即可确认要播哪一集。
+    private var playHelp: String {
+        guard let target = content.primaryPlaybackItem else { return "该季暂无剧集" }
+        if content.isSeries {
+            let code = content.episodeCode(for: target) ?? ""
+            return code.isEmpty ? target.name : "\(code) · \(target.name)"
+        }
+        return target.name
+    }
+
+    /// 发起播放。
+    private func play() {
+        guard let item = content.primaryPlaybackItem else { return }
+        onPlay(
+            DetailPlaybackRequest(
+                itemId: item.id,
+                resumeAt: item.userData.played ? .zero : item.userData.playbackPosition
+            )
+        )
+    }
+
+    /// 复制标题到剪贴板。
+    private func copyTitle() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(content.item.name, forType: .string)
+    }
+}
+
+/// 已看 / 收藏的描边切换按钮。
+///
+/// 选中时不填满强调色，以保证系统强调色被用户改成浅黄时仍有对比度。
+struct DetailToggleButton: View {
+    let systemImage: String
+    let title: LocalizedStringKey
+    let isOn: Bool
+    let isBusy: Bool
+    let showsTitle: Bool
+    let action: () -> Void
+
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.sm) {
+                if isBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                if showsTitle {
+                    Text(title)
+                        .font(Typography.headline)
+                }
+            }
+            .foregroundStyle(isOn ? Palette.accent : Palette.textPrimary)
+            .padding(.horizontal, showsTitle ? Spacing.lg : Spacing.sm)
+            .padding(.vertical, 7)
+            .frame(minWidth: showsTitle ? 0 : 34, minHeight: 30)
+            .background {
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(isOn ? Palette.accent.opacity(0.12) : Palette.surfaceElevated)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                            .fill(Palette.textPrimary.opacity(isHovering ? 0.06 : 0))
+                    }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(isOn ? Palette.accent : Palette.separator, lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: Motion.quick), value: isHovering)
+        .disabled(isBusy)
+        .opacity(isEnabled ? 1 : 0.45)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityValue(Text(isOn ? "已开启" : "未开启"))
+        .accessibilityAddTraits(isOn ? [.isSelected] : [])
+    }
+}
+
+// MARK: - 简介
+
+/// 可展开的简介。
+///
+/// 是否显示展开按钮通过实际排版高度判断，不依赖固定字符数阈值。
+struct DetailOverview: View {
+    let text: String
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isExpanded = false
+    @State private var fullTextHeight: CGFloat = 0
+    @State private var collapsedTextHeight: CGFloat = 0
+
+    private var isLong: Bool {
+        fullTextHeight > collapsedTextHeight + 1
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text(verbatim: text)
+                .font(Typography.body)
+                .foregroundStyle(Palette.textSecondary)
+                .lineLimit(isExpanded ? nil : 4)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+
+            if isLong {
+                Button(isExpanded ? "收起" : "展开") {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: Motion.standard)) {
+                        isExpanded.toggle()
+                    }
+                }
+                .buttonStyle(.link)
+                .accessibilityLabel(Text(isExpanded ? "收起简介" : "展开简介"))
+            }
+        }
+        .frame(maxWidth: 760, alignment: .leading)
+        .background(alignment: .topLeading) {
+            ZStack(alignment: .topLeading) {
+                measuredText(lineLimit: nil) { fullTextHeight = $0 }
+                measuredText(lineLimit: 4) { collapsedTextHeight = $0 }
+            }
+            .frame(height: 0, alignment: .top)
+            .accessibilityHidden(true)
+        }
+        .onChange(of: text) { _, _ in
+            isExpanded = false
+            fullTextHeight = 0
+            collapsedTextHeight = 0
+        }
+    }
+
+    private func measuredText(
+        lineLimit: Int?,
+        onMeasure: @escaping (CGFloat) -> Void
+    ) -> some View {
+        Text(verbatim: text)
+            .font(Typography.body)
+            .lineLimit(lineLimit)
+            .fixedSize(horizontal: false, vertical: true)
+            .hidden()
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                onMeasure(height)
+            }
+            .frame(height: 0, alignment: .top)
+    }
+}
+
+// MARK: - 分区
+
+/// 详情页分区：统一页面章节标题与内容间距。
+struct DetailSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PageMetrics.sectionHeaderSpacing) {
+            PrismSectionHeader(title)
+            content()
+        }
+    }
+}
+
+// MARK: - 相似推荐
+
+/// 横向滚动的相似推荐海报。
+struct DetailSimilarRow: View {
+    let items: [MediaItem]
+    let imageURL: (MediaItem) -> URL?
+    let onPlay: (MediaItem) -> Void
+    let onSelect: (MediaItem) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(alignment: .top, spacing: Spacing.lg) {
+                ForEach(items) { item in
+                    PosterCard(
+                        title: item.name,
+                        subtitle: item.subtitle,
+                        imageURL: imageURL(item),
+                        progress: item.isResumable ? item.progress : nil,
+                        isPlayed: item.userData.played,
+                        onPlay: { onPlay(item) },
+                        onSelect: { onSelect(item) }
+                    )
+                    .frame(width: 150)
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .scrollClipDisabled()
+    }
+}
+
+// MARK: - 动作错误提示
+
+/// 已看 / 收藏提交失败时的一行提示。
+///
+/// 详情内容仍然可用（乐观更新已回滚），所以**不把整页变成错误态**，
+/// 只在按钮行下方提示一句，让用户知道刚才那一下没生效。
+struct DetailActionErrorBanner: View {
+    let error: EmbyError
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: Spacing.sm) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+
+            Text(error.userMessage)
+                .font(Typography.caption)
+                .foregroundStyle(Palette.textSecondary)
+                .lineLimit(2)
+
+            Spacer(minLength: Spacing.sm)
+
+            Button("关闭", action: onDismiss)
+                .buttonStyle(.link)
+                .font(Typography.caption)
+        }
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, Spacing.sm)
+        .background {
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .fill(Palette.surfaceElevated)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(Palette.separator, lineWidth: 1)
+        }
+    }
+}
+
+// MARK: - 预览
+
+private struct MovieDetailPreviewBoard: View {
+    let model: DetailViewModel
+
+    var body: some View {
+        MovieDetailView(model: model)
+            .environment(\.posterImageLoader, DetailPreviewImageLoader())
+    }
+}
+
+#Preview("电影详情 · 已加载") {
+    MovieDetailPreviewBoard(
+        model: DetailViewModel(previewState: .loaded(DetailPreviewData.movieContent))
+    )
+    .prismTheme(PrismTheme(appearance: .dark))
+    .frame(width: 900, height: 900)
+}
+
+#Preview("电影详情 · 浅色") {
+    MovieDetailPreviewBoard(
+        model: DetailViewModel(previewState: .loaded(DetailPreviewData.movieContent))
+    )
+    .prismTheme(PrismTheme(appearance: .light))
+    .frame(width: 900, height: 900)
+}
+
+#Preview("电影详情 · 加载 → 已加载（真实数据源）") {
+    MovieDetailPreviewBoard(
+        model: DetailViewModel(
+            dataSource: PreviewDetailDataSource(delay: .milliseconds(600)),
+            itemId: DetailPreviewData.movie.id
+        )
+    )
+    .prismTheme(PrismTheme(appearance: .dark))
+    .frame(width: 900, height: 900)
+}
+
+/*
 // MARK: - 操作按钮行
 
 /// 播放 / 已看 / 收藏 / 更多。
@@ -456,6 +861,7 @@ private struct MovieDetailPreviewBoard: View {
     )
     .prismTheme(PrismTheme(appearance: .dark))
 }
+*/
 
 #Preview("电影详情 · 浅色") {
     MovieDetailPreviewBoard(model: DetailViewModel(previewState: .loaded(DetailPreviewData.movieContent)))

@@ -337,6 +337,7 @@ public final class PlaybackCoordinator {
             method: plan.method,
             headers: plan.headers,
             startPosition: engineStart,
+            externalSubtitles: plan.externalSubtitles,
             audioStreamIndex: plan.audioStreamIndex,
             subtitleStreamIndex: plan.subtitleStreamIndex
         )

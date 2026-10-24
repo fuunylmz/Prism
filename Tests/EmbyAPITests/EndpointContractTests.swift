@@ -146,6 +146,9 @@ struct EndpointContractTests {
         #expect(endpoint.query["Limit"] == "20")
         #expect(endpoint.query["MediaTypes"] == "Video")
         #expect(endpoint.query["Recursive"] == "true")
+        #expect(endpoint.query["EnableImages"] == "true")
+        #expect(endpoint.query["ImageTypeLimit"] == "1")
+        #expect(endpoint.query["EnableImageTypes"] == "Primary,Backdrop,Thumb")
         // Resume 不发送 Latest 专属的 GroupItems。
         #expect(endpoint.query["GroupItems"] == nil)
     }
@@ -164,6 +167,7 @@ struct EndpointContractTests {
         #expect(endpoint.query["Limit"] == "20")
         #expect(endpoint.query["IncludeItemTypes"] == "Movie")
         #expect(endpoint.query["GroupItems"] == "false")
+        #expect(endpoint.query["EnableImages"] == "true")
         // OpenAPI 标为数组，不支持分页。
         #expect(endpoint.query["StartIndex"] == nil)
     }
@@ -175,6 +179,7 @@ struct EndpointContractTests {
         #expect(endpoint.query["UserId"] == "u1")
         #expect(endpoint.query["SeriesId"] == "s1")
         #expect(endpoint.query["Limit"] == "24")
+        #expect(endpoint.query["EnableImages"] == "true")
     }
 
     @Test("ItemDetailEndpoint：路径")

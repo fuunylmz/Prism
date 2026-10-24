@@ -20,8 +20,10 @@ public struct ConnectView: View {
     /// 因为持久化（会话 + 服务器列表）需要 `ServerConnection`，
     /// 由上层统一做，界面不碰存储。
     private let onConnected: @MainActor (ServerConnection, AuthSession, Credentials, Bool) async -> Void
+    private let onCancel: (@MainActor @Sendable () -> Void)?
 
-    @State private var model = ConnectViewModel()
+    @State private var model: ConnectViewModel
+    @FocusState private var isAddressFocused: Bool
 
     /// 创建连接界面。
     ///
@@ -29,8 +31,13 @@ public struct ConnectView: View {
     ///   （上层在「记住我」时会把它们存下来，下次启动直接重新登录），
     ///   最后一个参数是「是否记住登录」。
     public init(
+        initialServer: ServerConnection? = nil,
+        initialUsername: String = "",
+        onCancel: (@MainActor @Sendable () -> Void)? = nil,
         onConnected: @escaping @MainActor (ServerConnection, AuthSession, Credentials, Bool) async -> Void
     ) {
+        _model = State(initialValue: ConnectViewModel(initialServer: initialServer, initialUsername: initialUsername))
+        self.onCancel = onCancel
         self.onConnected = onConnected
     }
 
@@ -38,33 +45,45 @@ public struct ConnectView: View {
         ZStack {
             Palette.surface.ignoresSafeArea()
 
-            VStack(spacing: Spacing.xl) {
+            VStack(spacing: 0) {
                 header
+                    .padding(.horizontal, Spacing.xl)
+                    .padding(.top, Spacing.xl)
+                    .padding(.bottom, Spacing.md)
 
-                Group {
-                    switch model.step {
-                    case .findingServer:
-                        ServerStepView(model: model)
-                    case .signingIn, .connecting:
-                        SignInStepView(model: model) {
-                            if let server = model.selectedServer,
-                               let auth = await model.signIn() {
-                                await onConnected(
-                                    server,
-                                    auth,
-                                    Credentials(username: model.username, password: model.password),
-                                    model.rememberMe
-                                )
-                                model.finishConnecting()
+                ScrollView {
+                    Group {
+                        switch model.step {
+                        case .findingServer:
+                            ServerStepView(model: model)
+                        case .signingIn, .connecting:
+                            SignInStepView(model: model) {
+                                await submitSignIn()
                             }
                         }
                     }
+                    .frame(maxWidth: 460)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, Spacing.xl)
+                    .padding(.vertical, Spacing.md)
                 }
-                .frame(maxWidth: 460)
-                .padding(Spacing.xl)
-                .background(Palette.surfaceElevated, in: RoundedRectangle(cornerRadius: Radius.panel))
+                .scrollBounceBehavior(.basedOnSize)
+
+                actionFooter
+                    .frame(maxWidth: 460)
+                    .padding(.horizontal, Spacing.xl)
+                    .padding(.vertical, Spacing.md)
+                    .background(.bar)
+
+                if let onCancel {
+                    Button("返回当前服务器", action: onCancel)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Palette.textSecondary)
+                        .padding(.bottom, Spacing.md)
+                }
             }
-            .padding(Spacing.xxl)
+            .frame(maxWidth: 520, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task { await model.startDiscovery() }
     }
@@ -81,50 +100,29 @@ public struct ConnectView: View {
                 .foregroundStyle(Palette.textSecondary)
         }
     }
-}
 
-// MARK: - 第一步：找服务器
+    @ViewBuilder
+    private var actionFooter: some View {
+        switch model.step {
+        case .findingServer:
+            manualConnectionFooter
+        case .signingIn, .connecting:
+            signInFooter
+        }
+    }
 
-private struct ServerStepView: View {
-    @Bindable var model: ConnectViewModel
-    @FocusState private var isAddressFocused: Bool
+    private var manualConnectionFooter: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text("手动输入地址")
+                .font(Typography.headline)
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.lg) {
-            recentSection
-
-            if !model.recentServers.isEmpty {
-                Divider()
-            }
-
-            discoveredSection
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("手动输入地址")
-                    .font(Typography.headline)
-
+            HStack(spacing: Spacing.sm) {
                 TextField("http://192.168.1.10:8096", text: $model.addressText)
                     .textFieldStyle(.roundedBorder)
                     .focused($isAddressFocused)
                     .onSubmit { Task { await model.connectManually() } }
                     .disabled(model.isBusy)
 
-                Text("可以粘贴完整地址。不写端口默认 8096，不写协议默认 http。")
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textSecondary)
-            }
-
-            if let error = model.errorMessage {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(Typography.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack {
-                Spacer()
                 Button {
                     Task { await model.connectManually() }
                 } label: {
@@ -138,6 +136,74 @@ private struct ServerStepView: View {
                 .disabled(model.isBusy || model.addressText.trimmingCharacters(in: .whitespaces).isEmpty)
                 .keyboardShortcut(.defaultAction)
             }
+
+            Text("可以粘贴完整地址。不写端口默认 8096，不写协议默认 http。")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.textSecondary)
+
+            if let error = model.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(Typography.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var signInFooter: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            if let error = model.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(Typography.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button {
+                    Task { await submitSignIn() }
+                } label: {
+                    if model.isBusy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("登录")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isBusy || model.username.isEmpty || model.step == .connecting)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+    }
+
+    private func submitSignIn() async {
+        guard let server = model.selectedServer,
+              let auth = await model.signIn() else { return }
+        await onConnected(
+            server,
+            auth,
+            Credentials(username: model.username, password: model.password),
+            model.rememberMe
+        )
+        model.finishConnecting()
+    }
+}
+
+// MARK: - 第一步：找服务器
+
+private struct ServerStepView: View {
+    @Bindable var model: ConnectViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            recentSection
+
+            if !model.recentServers.isEmpty {
+                Divider()
+            }
+
+            discoveredSection
         }
     }
 
@@ -168,7 +234,7 @@ private struct ServerStepView: View {
                         }
                         .contentShape(Rectangle())
                         .padding(Spacing.sm)
-                        .background(Palette.surface, in: RoundedRectangle(cornerRadius: Radius.card))
+                        .background(Palette.surfaceElevated, in: RoundedRectangle(cornerRadius: Radius.card))
                     }
                     .buttonStyle(.plain)
                 }
@@ -218,7 +284,7 @@ private struct ServerStepView: View {
                         }
                         .contentShape(Rectangle())
                         .padding(Spacing.sm)
-                        .background(Palette.surface, in: RoundedRectangle(cornerRadius: Radius.card))
+                        .background(Palette.surfaceElevated, in: RoundedRectangle(cornerRadius: Radius.card))
                     }
                     .buttonStyle(.plain)
                 }
@@ -275,28 +341,6 @@ private struct SignInStepView: View {
                 .font(Typography.caption)
                 .disabled(model.isBusy)
 
-            if let error = model.errorMessage {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(Typography.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack {
-                Spacer()
-                Button {
-                    Task { await onSubmit() }
-                } label: {
-                    if model.isBusy {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("登录")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.isBusy || model.username.isEmpty || model.step == .connecting)
-                .keyboardShortcut(.defaultAction)
-            }
         }
         .onAppear { focusedField = .username }
     }

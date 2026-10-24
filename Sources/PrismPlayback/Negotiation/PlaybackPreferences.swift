@@ -1,4 +1,5 @@
 import Foundation
+import PrismCore
 
 /// 播放协商的用户偏好。
 ///
@@ -39,14 +40,19 @@ public struct PlaybackPreferences: Sendable, Equatable {
 
     /// 首选字幕语言（ISO 639-1/2）。
     ///
-    /// `nil` 表示不干预，沿用服务器算出的默认字幕。
+    /// `nil` 时 `interfaceLanguage` 作为「自动」语言参考。
     public var preferredSubtitleLanguage: String?
+
+    /// 界面语言对应的字幕语言（ISO 639-1/2），用于 `.foreign` 自动显示策略。
+    public var interfaceLanguage: String?
+
+    /// 自动字幕策略。
+    public var subtitleMode: SubtitleMode
 
     /// 图形字幕（PGS / DVDSUB / VOBSUB）是否烧录（默认 `true`）。
     ///
     /// - `true`：图形字幕必须烧进画面 → 该片源**必然转码**。
-    /// - `false`：不烧录，也不转码；代价是这类字幕**不会显示**
-    ///   （客户端没有 PGS 解码能力，见 ``SubtitleBurnInDecider``）。
+    /// - `false`：不要求服务端烧录；支持时由客户端把引擎解码出的位图 cue 叠加到画面。
     ///
     /// 依据：`.prismMacOS()` 的 `SubtitleProfiles` 把 `pgssub` / `dvdsub` 声明为 `Encode`，
     /// 见 `docs/research/emby-api.md` §6.2.4 的取舍说明。
@@ -60,6 +66,8 @@ public struct PlaybackPreferences: Sendable, Equatable {
     ///   - forceTranscode: 是否强制转码。
     ///   - preferredAudioLanguage: 首选音频语言。
     ///   - preferredSubtitleLanguage: 首选字幕语言。
+    ///   - interfaceLanguage: `.foreign` 模式的界面语言。
+    ///   - subtitleMode: 自动字幕策略。
     ///   - burnInImageSubtitles: 图形字幕是否烧录。
     public init(
         maxBitrateMbps: Int = 0,
@@ -67,6 +75,8 @@ public struct PlaybackPreferences: Sendable, Equatable {
         forceTranscode: Bool = false,
         preferredAudioLanguage: String? = nil,
         preferredSubtitleLanguage: String? = nil,
+        interfaceLanguage: String? = nil,
+        subtitleMode: SubtitleMode = .foreign,
         burnInImageSubtitles: Bool = true
     ) {
         self.maxBitrateMbps = maxBitrateMbps
@@ -74,6 +84,8 @@ public struct PlaybackPreferences: Sendable, Equatable {
         self.forceTranscode = forceTranscode
         self.preferredAudioLanguage = preferredAudioLanguage
         self.preferredSubtitleLanguage = preferredSubtitleLanguage
+        self.interfaceLanguage = interfaceLanguage
+        self.subtitleMode = subtitleMode
         self.burnInImageSubtitles = burnInImageSubtitles
     }
 

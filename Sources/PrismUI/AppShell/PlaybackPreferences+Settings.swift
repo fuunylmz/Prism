@@ -1,3 +1,4 @@
+import Foundation
 import PrismCore
 import PrismPlayback
 
@@ -33,6 +34,8 @@ extension PlaybackPreferences {
             forceTranscode: false,
             preferredAudioLanguage: Self.normalizedLanguage(settings.preferredAudioLanguage),
             preferredSubtitleLanguage: Self.normalizedLanguage(settings.preferredSubtitleLanguage),
+            interfaceLanguage: Self.interfaceLanguage(settings.language),
+            subtitleMode: settings.subtitleMode,
             burnInImageSubtitles: true
         )
     }
@@ -50,5 +53,21 @@ extension PlaybackPreferences {
               !trimmed.isEmpty
         else { return nil }
         return trimmed.lowercased()
+    }
+
+    private static func interfaceLanguage(_ language: AppLanguage) -> String? {
+        switch language {
+        case .zhHans: return "chi"
+        case .en: return "eng"
+        case .system:
+            let code = Locale.current.language.languageCode?.identifier.lowercased()
+            switch code {
+            case "zh": return "chi"
+            case "en": return "eng"
+            case "ja": return "jpn"
+            case "ko": return "kor"
+            default: return code
+            }
+        }
     }
 }

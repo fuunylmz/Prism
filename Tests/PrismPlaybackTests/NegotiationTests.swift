@@ -421,6 +421,63 @@ struct NegotiationOverrideTests {
 @Suite("播放协商 · 字幕烧录")
 struct NegotiationSubtitleTests {
 
+    private func subtitleModePlan(
+        mode: SubtitleMode,
+        audioLanguage: String,
+        subtitles: [MediaStream],
+        interfaceLanguage: String? = "chi"
+    ) throws -> PlaybackPlan {
+        let source = MediaSource(
+            id: "ms-subtitle-mode",
+            container: "mkv",
+            directStreamUrl: "/videos/item-1/stream?Static=true&MediaSourceId=ms-subtitle-mode",
+            mediaStreams: [
+                videoStream("h264"),
+                MediaStream(index: 1, type: .audio, codec: "aac", language: audioLanguage, isDefault: true)
+            ] + subtitles,
+            supportsDirectPlay: true,
+            supportsDirectStream: true,
+            supportsTranscoding: true,
+            defaultSubtitleStreamIndex: subtitles.first?.index
+        )
+        return try makeNegotiator(settings: PlaybackPreferences(
+            interfaceLanguage: interfaceLanguage,
+            subtitleMode: mode
+        )).negotiate(
+            item: makeItem(),
+            info: PlaybackInfoResponse(mediaSources: [source], playSessionId: "ps-subtitle-mode")
+        )
+    }
+
+    @Test("外语模式会按界面语言自动选择字幕，本地音轨时保持关闭")
+    func foreignModeUsesInterfaceLanguage() throws {
+        let chinese = srtSubtitle(index: 2)
+
+        let foreignAudio = try subtitleModePlan(mode: .foreign, audioLanguage: "eng", subtitles: [chinese])
+        let localAudio = try subtitleModePlan(mode: .foreign, audioLanguage: "chi", subtitles: [chinese])
+
+        #expect(foreignAudio.subtitleStreamIndex == 2)
+        #expect(localAudio.subtitleStreamIndex == nil)
+    }
+
+    @Test("总是 / 强制 / 从不三种自动显示模式按设置选轨")
+    func subtitleModesSelectExpectedTracks() throws {
+        let chinese = srtSubtitle(index: 2)
+        let forced = MediaStream(
+            index: 3,
+            type: .subtitle,
+            codec: "subrip",
+            language: "eng",
+            isForced: true,
+            isTextSubtitleStream: true
+        )
+        let tracks = [chinese, forced]
+
+        #expect(try subtitleModePlan(mode: .always, audioLanguage: "chi", subtitles: tracks).subtitleStreamIndex == 2)
+        #expect(try subtitleModePlan(mode: .forced, audioLanguage: "eng", subtitles: tracks).subtitleStreamIndex == 3)
+        #expect(try subtitleModePlan(mode: .never, audioLanguage: "eng", subtitles: tracks).subtitleStreamIndex == nil)
+    }
+
     @Test("PGS 需要烧录，SRT 不需要")
     func burnInDecision() {
         let decider = SubtitleBurnInDecider()
@@ -519,6 +576,45 @@ struct NegotiationSubtitleTests {
 
 @Suite("播放协商 · 续播与 URL 增补")
 struct NegotiationURLTests {
+
+    @Test("首选外挂字幕进入引擎请求，并保留 Emby 子路径与鉴权头继承")
+    func externalSubtitleDelivery() throws {
+        let subtitle = MediaStream(
+            index: 5,
+            type: .subtitle,
+            codec: "ass",
+            language: "chi",
+            displayTitle: "简体中文 ASS",
+            isExternal: true,
+            deliveryUrl: "/Videos/item-1/item-1/Subtitles/5/0/Stream.ass",
+            isTextSubtitleStream: true,
+            supportsExternalStream: true
+        )
+        let source = MediaSource(
+            id: "ms-external-subtitle",
+            container: "mkv",
+            directStreamUrl: "/videos/item-1/stream?Static=true&MediaSourceId=ms-external-subtitle",
+            mediaStreams: [videoStream("h264"), audioStream("aac"), subtitle],
+            supportsDirectPlay: true,
+            supportsDirectStream: true,
+            supportsTranscoding: true
+        )
+        let info = PlaybackInfoResponse(mediaSources: [source], playSessionId: "ps-subtitle")
+        let negotiator = makeNegotiator(
+            settings: PlaybackPreferences(preferredSubtitleLanguage: "chi"),
+            headers: ["X-Emby-Token": "test-token"]
+        )
+
+        let plan = try negotiator.negotiate(item: makeItem(), info: info)
+
+        #expect(plan.subtitleStreamIndex == 5)
+        #expect(plan.externalSubtitles.count == 1)
+        #expect(plan.externalSubtitles[0].id == "5")
+        #expect(plan.externalSubtitles[0].format == .ass)
+        #expect(plan.externalSubtitles[0].url.path == "/emby/Videos/item-1/item-1/Subtitles/5/0/Stream.ass")
+        #expect(plan.externalSubtitles[0].httpHeaders == nil)
+        #expect(plan.headers["X-Emby-Token"] == "test-token")
+    }
 
     @Test("续播 300s → URL 含 StartTimeTicks=3000000000")
     func resumePositionInURL() throws {

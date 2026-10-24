@@ -41,6 +41,9 @@ public struct HomeView: View {
     /// 媒体库列表加载完成后的回调（外壳用它把真实 view id 注入侧边栏）。
     private let onLibrariesLoaded: ([MediaView]) -> Void
 
+    /// 当前是否在前台显示；隐藏时撤下首页专属工具栏项。
+    private let isActive: Bool
+
     /// 内容区宽度，用于按 UX §5.3 在 24 / 32 之间切换左右边距。
     @State private var contentWidth: CGFloat = 0
 
@@ -61,17 +64,19 @@ public struct HomeView: View {
         model: HomeViewModel,
         imageResolver: HomeImageResolver = .disabled,
         onNavigate: @escaping (Route) -> Void,
-        onLibrariesLoaded: @escaping ([MediaView]) -> Void = { _ in }
+        onLibrariesLoaded: @escaping ([MediaView]) -> Void = { _ in },
+        isActive: Bool = true
     ) {
         _model = State(initialValue: model)
         self.imageResolver = imageResolver
         self.onNavigate = onNavigate
         self.onLibrariesLoaded = onLibrariesLoaded
+        self.isActive = isActive
     }
 
     public var body: some View {
         ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: Spacing.xl) {
+            VStack(alignment: .leading, spacing: PageMetrics.sectionSpacing) {
                 stateContent
             }
             .padding(.horizontal, HomeMetrics.horizontalPadding(for: contentWidth))
@@ -100,8 +105,10 @@ public struct HomeView: View {
         // ⌘R 刷新（UX §S04「刷新：⌘R」）。工具栏按钮是 macOS 上唯一「看得见」的
         // 刷新入口；快捷键挂在按钮上，窗口激活时即生效。
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                refreshControl
+            if isActive {
+                ToolbarItem(placement: .primaryAction) {
+                    refreshControl
+                }
             }
         }
     }
@@ -142,7 +149,7 @@ public struct HomeView: View {
             HomePlaceholder()
 
         case let .loaded(content):
-            VStack(alignment: .leading, spacing: Spacing.xl) {
+            VStack(alignment: .leading, spacing: PageMetrics.sectionSpacing) {
                 if model.hasPartialFailure {
                     PartialFailureBanner(message: model.partialFailureMessage) {
                         Task { await model.refresh() }
@@ -280,10 +287,7 @@ public struct HomeView: View {
     /// 打开详情。
     ///
     /// 首页只上报 ``PrismUI/Route/detail(itemId:)``，不直接持有 ``PrismUI/NavigationModel``
-    /// （可测试、可预览）。**集成注意**：外壳当前对首页路由的
-    /// `showsDetailColumn` 为 `false`，`NavigationModel.navigate(to: .detail)` 会直接
-    /// 返回；外壳接入首页时需要在 `ContentColumnView` 里把首页的单击处理成
-    /// 「切到对应媒体库路由 + `pushDetail`」或让首页也显示详情栏。
+    /// （可测试、可预览）。外壳会把详情页放进主内容栏。
     ///
     /// - Parameter item: 被点击的条目。
     private func openDetail(_ item: MediaItem) {
@@ -369,19 +373,8 @@ private struct ExpandedSectionList: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
-                Text(verbatim: title)
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.textPrimary)
-                    .accessibilityAddTraits(.isHeader)
-
-                Text("全部 \(items.count) 项")
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textSecondary)
-
-                Spacer(minLength: Spacing.md)
-
+        VStack(alignment: .leading, spacing: PageMetrics.sectionHeaderSpacing) {
+            PrismSectionHeader(title, count: items.count) {
                 Button(action: onClose) {
                     HStack(spacing: 2) {
                         Text("收起")

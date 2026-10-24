@@ -94,6 +94,9 @@ public final class AetherEngineAdapter: PlaybackEngine {
     /// 最近一次发布的字幕轨。
     private var subtitleTracks: [TrackInfo] = []
 
+    /// 已转码的位图 cue，按引擎快照中的 cue id 缓存，避免每个时钟更新都重编码。
+    private var bitmapSubtitleCache: [Int: SubtitleBitmap] = [:]
+
     /// 上一次已发布的轨道快照（用于去重）。
     private var lastAudioTracks: [TrackInfo]?
     private var lastSubtitleTracks: [TrackInfo]?
@@ -193,7 +196,10 @@ public final class AetherEngineAdapter: PlaybackEngine {
 
         // 起播时选中字幕（坑 4 的偏移在发 cue 时才施加，这里只管选轨）。
         if let subtitleIndex = request.subtitleStreamIndex {
-            player.selectSubtitleTrack(index: subtitleIndex)
+            let engineIndex = request.externalSubtitles.firstIndex { $0.id == String(subtitleIndex) }
+                .map { AetherEngine.externalSubtitleTrackIDBase + $0 }
+                ?? subtitleIndex
+            player.selectSubtitleTrack(index: engineIndex)
         }
 
         // 坑 1：这里**不读** player.duration（此刻还是 0），等 $duration 观察者发事件。
@@ -445,6 +451,8 @@ public final class AetherEngineAdapter: PlaybackEngine {
         observationTasks.add(Task { @MainActor [weak self] in
             for await cues in engine.$subtitleCues.values {
                 guard let self else { return }
+                let cueIDs = Set(cues.map(\.id))
+                self.bitmapSubtitleCache = self.bitmapSubtitleCache.filter { cueIDs.contains($0.key) }
                 let mapped: [SubtitleCue] = cues.compactMap { cue in
                     let body: SubtitleCue.Body
                     switch cue.body {
@@ -463,9 +471,26 @@ public final class AetherEngineAdapter: PlaybackEngine {
                                 fontSize: run.fontSize.map(Double.init)
                             )
                         })
-                    case .image:
-                        // 图形字幕（PGS / DVB / VOBSUB）留给 T3.6：CGImage 无法做成 Equatable 值类型。
-                        return nil
+                    case let .image(image):
+                        let bitmap: SubtitleBitmap
+                        if let cached = self.bitmapSubtitleCache[cue.id] {
+                            bitmap = cached
+                        } else {
+                            guard let data = NSBitmapImageRep(cgImage: image.cgImage)
+                                .representation(using: .png, properties: [:]) else { return nil }
+                            bitmap = SubtitleBitmap(
+                                pngData: data,
+                                x: image.position.origin.x,
+                                y: image.position.origin.y,
+                                width: image.position.width,
+                                height: image.position.height,
+                                canvasWidth: image.canvasSize.width,
+                                canvasHeight: image.canvasSize.height,
+                                isForced: image.isForced
+                            )
+                        }
+                        self.bitmapSubtitleCache[cue.id] = bitmap
+                        body = .image(bitmap)
                     }
                     let placement = cue.placement.map {
                         SubtitleCue.Placement(alignment: $0.alignment, position: $0.position)
@@ -654,6 +679,7 @@ public final class AetherEngineAdapter: PlaybackEngine {
         isRebuilding = false
         positionGate.reset()
         subtitleTimeline.reset()
+        bitmapSubtitleCache.removeAll(keepingCapacity: false)
         audioTracks = []
         subtitleTracks = []
         lastAudioTracks = nil

@@ -21,6 +21,11 @@ public struct LibrarySkeletonView: View {
 
     private let layout: GridLayout
     private let itemCount: Int
+    @State private var containerWidth: CGFloat = 0
+
+    private var horizontalInset: CGFloat {
+        PageMetrics.horizontalInset(for: containerWidth)
+    }
 
     /// 创建骨架屏。
     ///
@@ -44,6 +49,11 @@ public struct LibrarySkeletonView: View {
         .scrollDisabled(true)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("正在加载媒体库"))
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            containerWidth = width
+        }
     }
 
     // MARK: 网格形态
@@ -64,7 +74,8 @@ public struct LibrarySkeletonView: View {
                 }
             }
         }
-        .padding(Spacing.xl)
+        .padding(.horizontal, horizontalInset)
+        .padding(.vertical, Spacing.xl)
     }
 
     // MARK: 列表形态
@@ -91,7 +102,8 @@ public struct LibrarySkeletonView: View {
                 }
             }
         }
-        .padding(Spacing.xl)
+        .padding(.horizontal, horizontalInset)
+        .padding(.vertical, Spacing.xl)
     }
 }
 

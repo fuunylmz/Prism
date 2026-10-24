@@ -113,7 +113,7 @@ public struct EmbySearchDataSource: SearchDataSource, SearchImageProviding {
     ///   - tag: 图片 tag；`nil` 或空串表示没有该图片，直接返回 `nil`（避免 404）。
     ///   - maxWidth: 期望最大宽度；`<= 0` 时不传。
     /// - Returns: 图片地址；参数不完整时为 `nil`。
-    public func imageURL(for id: String, tag: String?, maxWidth: Int) -> URL? {
+    public func imageURL(for id: String, kind: ImageKind, tag: String?, maxWidth: Int) -> URL? {
         guard !id.isEmpty, let tag, !tag.isEmpty else { return nil }
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return nil
@@ -126,7 +126,7 @@ public struct EmbySearchDataSource: SearchDataSource, SearchImageProviding {
         while basePath.hasSuffix("/") {
             basePath.removeLast()
         }
-        components.path = basePath + "/Items/\(escapedId)/Images/Primary"
+        components.path = basePath + "/Items/\(escapedId)/Images/\(kind.rawValue)"
 
         var queryItems = [URLQueryItem(name: "tag", value: tag)]
         if maxWidth > 0 {

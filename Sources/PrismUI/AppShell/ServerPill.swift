@@ -5,14 +5,14 @@ import SwiftUI
 /// 侧边栏底部的服务器胶囊。
 ///
 /// 展示当前服务器名、连接状态点与当前用户头像占位；点击（或 ⌘⇧S）展开菜单：
-/// 用户信息 / 服务器列表（v1.0 只做切换）/ 设置… / 退出登录。
+/// 用户信息 / 已保存服务器列表 / 设置… / 退出登录。
 ///
 /// 约定：
 /// - 头像使用「首字母 + 服务器色」的圆形占位；真实头像由用户资料工单接入
 ///   （`EmbyUser.primaryImageTag` + 图片加载器），此处不发起任何网络请求。
 /// - 每台服务器分配一个稳定色相（对 `serverId` 做确定性哈希），
 ///   同名服务器也能靠颜色区分（`docs/research/ux-benchmark.md` §2.4）。
-/// - 多服务器聚合 / 管理服务器 / 添加服务器属于 v1.1，v1.0 只保留切换。
+/// - 已保存服务器可直接切换；添加新服务器会打开连接流程。
 struct ServerPill: View {
     /// 导航模型。
     @Bindable var model: NavigationModel
@@ -213,25 +213,30 @@ struct ServerPill: View {
                     .padding(.horizontal, Spacing.sm)
                     .padding(.vertical, Spacing.xs)
             } else {
-                ForEach(model.servers) { server in
-                    ServerMenuRow(
-                        title: server.name,
-                        status: model.status(for: server.id),
-                        isSelected: server.id == model.currentServer?.id
-                    ) {
-                        model.selectServer(id: server.id)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(model.servers) { server in
+                            ServerMenuRow(
+                                title: server.name,
+                                status: model.status(for: server.id),
+                                isSelected: server.id == model.currentServer?.id
+                            ) {
+                                model.selectServer(id: server.id)
+                            }
+                            .frame(minHeight: 32)
+                        }
                     }
                 }
+                .frame(height: min(CGFloat(model.servers.count) * 34, 272))
+                .scrollIndicators(model.servers.count > 8 ? .visible : .hidden)
+                .accessibilityLabel("服务器列表")
             }
 
-            ServerMenuRow(
-                title: "管理服务器…",
-                systemImage: "externaldrive.connected.to.line.below",
-                isEnabled: false,
-                badge: "v1.1"
-            ) {
-                // v1.1 提供多服务器管理；v1.0 仅支持切换。
+            ServerMenuRow(title: "添加服务器…", systemImage: "plus") {
+                model.isServerSwitcherPresented = false
+                model.onAddServer?()
             }
+
         }
     }
 

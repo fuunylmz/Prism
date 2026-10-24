@@ -112,9 +112,6 @@ public struct CinematicHeader: View {
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .frame(width: proxy.size.width, height: proxy.size.height)
-                        // opaque: true 让模糊核把边缘当作图像内部像素，
-                        // 否则四边会渗出透明、露出下面的背景色。
-                        .blur(radius: 26, opaque: true)
                         .scaleEffect(zoomScale)
                         .animation(reduceMotion ? nil : .easeOut(duration: Motion.slow), value: isHovering)
                 } else {
@@ -126,10 +123,10 @@ public struct CinematicHeader: View {
         .accessibilityHidden(true)
     }
 
-    /// 悬停时轻微推近（UX §S07：1.02，0.4s）；基础缩放 1.08 用来盖住模糊边缘。
+    /// 悬停时轻微推近（UX §S07：1.02，0.4s）；基础缩放只用于覆盖边缘。
     private var zoomScale: CGFloat {
-        guard !reduceMotion else { return 1.08 }
-        return isHovering ? 1.10 : 1.08
+        guard !reduceMotion else { return 1.02 }
+        return isHovering ? 1.04 : 1.02
     }
 
     // MARK: 渐变
@@ -309,7 +306,7 @@ public struct CinematicHeader: View {
         do {
             let image = try await loader.image(
                 for: backdropURL,
-                targetSize: CGSize(width: 1280, height: 720)
+                targetSize: CGSize(width: 1920, height: 1080)
             )
             guard !Task.isCancelled else { return }
             backdrop = image

@@ -37,6 +37,9 @@ public struct PlaybackPlan: Sendable, Equatable {
     /// 字幕序号（`MediaStream.Index`）；`nil` 表示关闭字幕。
     public let subtitleStreamIndex: Int?
 
+    /// 服务端声明的外挂字幕文件，按 `MediaStream.Index` 顺序注册到播放引擎。
+    public let externalSubtitles: [SubtitleTrack]
+
     /// 时长（来自媒体源，缺失时回退到条目的 `RunTimeTicks`）。
     ///
     /// - Important: 这只是「协商时已知的时长」。引擎 `load()` 刚返回时读到的时长可能是 0，
@@ -68,6 +71,7 @@ public struct PlaybackPlan: Sendable, Equatable {
         startPosition: Ticks = .zero,
         audioStreamIndex: Int? = nil,
         subtitleStreamIndex: Int? = nil,
+        externalSubtitles: [SubtitleTrack] = [],
         duration: Ticks? = nil,
         reason: NegotiationReason
     ) {
@@ -79,6 +83,7 @@ public struct PlaybackPlan: Sendable, Equatable {
         self.startPosition = startPosition
         self.audioStreamIndex = audioStreamIndex
         self.subtitleStreamIndex = subtitleStreamIndex
+        self.externalSubtitles = externalSubtitles
         self.duration = duration
         self.reason = reason
     }

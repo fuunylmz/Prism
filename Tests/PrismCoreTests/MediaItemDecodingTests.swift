@@ -114,6 +114,20 @@ private enum Fixtures {
      "MediaSources": [{"Id": "ok"}, {"Id": "also-ok", "MediaStreams": [{"Index": 0}, 42]}],
      "IndexNumber": 3, "ParentIndexNumber": 1, "SeriesName": "Test Show"}
     """.utf8)
+
+    /// 单集常见的继承图片字段：自身没有 Primary/Thumb，图片来自所属剧集。
+    static let inheritedImages = Data("""
+    {
+      "Id": "episode-1", "Name": "第一集", "Type": "Episode",
+      "ServerId": "server-1", "SeriesId": "series-1",
+      "ImageTags": {}, "BackdropImageTags": [],
+      "SeriesPrimaryImageTag": "series-tag",
+      "PrimaryImageItemId": "series-1",
+      "ParentThumbItemId": "series-1", "ParentThumbImageTag": "thumb-tag",
+      "ParentBackdropItemId": "series-1",
+      "ParentBackdropImageTags": ["backdrop-tag"]
+    }
+    """.utf8)
 }
 
 @Suite("MediaItem 解码健壮性")
@@ -266,6 +280,16 @@ struct MediaItemDecodingTests {
         // 直接构造也做归一化
         #expect(ImageKind("PRIMARY") == .primary)
         #expect(ImageKind("Thumb") == .thumb)
+    }
+
+    @Test("单集继承剧集图片字段，并生成正确图片来源")
+    func inheritedImageFields() throws {
+        let item = try JSONDecoder().decode(MediaItem.self, from: Fixtures.inheritedImages)
+
+        #expect(item.primaryImageTag == nil)
+        #expect(item.imageSource(for: .primary) == .init(itemId: "series-1", kind: .primary, tag: "series-tag"))
+        #expect(item.imageSource(for: .thumb) == .init(itemId: "series-1", kind: .thumb, tag: "thumb-tag"))
+        #expect(item.imageSource(for: .backdrop) == .init(itemId: "series-1", kind: .backdrop, tag: "backdrop-tag", index: 0))
     }
 
     @Test("日期：带小数秒 / 不带时区都能解析")

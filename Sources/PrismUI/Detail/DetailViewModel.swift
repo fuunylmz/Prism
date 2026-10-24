@@ -546,8 +546,8 @@ public final class DetailViewModel {
     /// - Parameter item: 条目。
     /// - Returns: 地址；都没有时为 `nil`（头图会退化成纯色 + 标题）。
     public func headerImageURL(for item: MediaItem) -> URL? {
-        imageURL(for: item, kind: .backdrop, maxWidth: 1600)
-            ?? imageURL(for: item, kind: .primary, maxWidth: 1200)
+        imageURL(for: item, kind: .backdrop, maxWidth: 1920)
+            ?? imageURL(for: item, kind: .primary, maxWidth: 1600)
     }
 
     /// 标题 logo 地址（透明 PNG）；没有 logo 时返回 `nil`，头图改用文字标题。
@@ -584,7 +584,7 @@ public final class DetailViewModel {
     /// - Parameter person: 演职员。
     /// - Returns: 地址；没有头像时为 `nil`（UI 显示姓名首字）。
     public func avatarImageURL(for person: Person) -> URL? {
-        dataSource.imageURL(
+        return dataSource.imageURL(
             itemId: person.id,
             kind: .primary,
             tag: person.primaryImageTag,
@@ -600,10 +600,11 @@ public final class DetailViewModel {
     ///   - maxWidth: 期望宽度。
     /// - Returns: 地址。
     public func imageURL(for item: MediaItem, kind: ImageKind, maxWidth: Int) -> URL? {
-        dataSource.imageURL(
-            itemId: item.id,
-            kind: kind,
-            tag: Self.tag(for: item, kind: kind),
+        guard let source = item.imageSource(for: kind) else { return nil }
+        return dataSource.imageURL(
+            itemId: source.itemId,
+            kind: source.kind,
+            tag: source.tag,
             maxWidth: maxWidth
         )
     }
@@ -840,6 +841,14 @@ extension MediaItem {
             genres: genres,
             imageTags: imageTags,
             backdropTags: backdropTags,
+            seriesPrimaryImageTag: seriesPrimaryImageTag,
+            primaryImageItemId: primaryImageItemId,
+            parentBackdropItemId: parentBackdropItemId,
+            parentBackdropTags: parentBackdropTags,
+            parentThumbItemId: parentThumbItemId,
+            parentThumbImageTag: parentThumbImageTag,
+            parentLogoItemId: parentLogoItemId,
+            parentLogoImageTag: parentLogoImageTag,
             userData: userData,
             seriesId: seriesId,
             seasonId: seasonId,

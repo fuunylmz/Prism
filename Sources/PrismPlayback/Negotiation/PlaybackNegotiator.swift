@@ -116,7 +116,11 @@ public struct PlaybackNegotiator: Sendable {
         let position = startPosition < .zero ? Ticks(0) : startPosition
 
         let audioStream = resolveAudioStream(in: source, requested: audioStreamIndex)
-        let subtitleStream = resolveSubtitleStream(in: source, requested: subtitleStreamIndex)
+        let subtitleStream = resolveSubtitleStream(
+            in: source,
+            requested: subtitleStreamIndex,
+            audioStream: audioStream
+        )
         let burnIn = subtitleStream.map { subtitleDecider.requiresBurnIn($0) } ?? false
 
         let decision = decide(
@@ -146,6 +150,7 @@ public struct PlaybackNegotiator: Sendable {
             startPosition: position,
             audioStreamIndex: audioStream?.index,
             subtitleStreamIndex: subtitleStream?.index,
+            externalSubtitles: externalSubtitleTracks(in: source),
             duration: source.runTime ?? item.runTime,
             reason: decision.reason
         )
@@ -170,6 +175,55 @@ extension PlaybackNegotiator {
             return directPlayable
         }
         return sources.first
+    }
+}
+
+private extension PlaybackNegotiator {
+    /// 把 PlaybackInfo 声明的可外取字幕转换为带鉴权继承的引擎轨道。
+    func externalSubtitleTracks(in source: MediaSource) -> [SubtitleTrack] {
+        source.streams(ofType: .subtitle).compactMap { stream in
+            guard stream.isExternal,
+                  stream.supportsExternalStream,
+                  let deliveryURL = stream.deliveryUrl,
+                  let url = resolvedDeliveryURL(deliveryURL) else { return nil }
+
+            return SubtitleTrack(
+                id: String(stream.index),
+                url: url,
+                title: stream.displayTitle ?? stream.title,
+                language: stream.language,
+                format: subtitleFormat(for: stream.codec, url: url),
+                isForced: stream.isForced,
+                isDefault: stream.isDefault
+            )
+        }
+    }
+
+    func resolvedDeliveryURL(_ value: String) -> URL? {
+        guard let components = URLComponents(string: value) else { return nil }
+        if let scheme = components.scheme, !scheme.isEmpty {
+            return components.url
+        }
+        var query: [String: String] = [:]
+        for item in components.queryItems ?? [] {
+            query[item.name] = item.value ?? ""
+        }
+        return try? RequestBuilder.joinedURL(
+            baseURL: baseURL,
+            path: components.path,
+            query: query
+        )
+    }
+
+    func subtitleFormat(for codec: String?, url: URL) -> SubtitleTrack.Format {
+        switch codec?.lowercased() {
+        case "subrip", "srt": .srt
+        case "ass": .ass
+        case "ssa": .ssa
+        case "webvtt", "vtt": .vtt
+        case "pgssub", "hdmv_pgs_subtitle", "pgs", "dvdsub", "dvd_subtitle": .pgs
+        default: .inferred(from: url)
+        }
     }
 }
 
@@ -199,26 +253,51 @@ extension PlaybackNegotiator {
 
     /// 解析实际使用的字幕轨。
     ///
-    /// 优先级：调用方指定（`-1` = 关闭）→ 用户偏好语言 → 关闭。
+    /// 优先级：调用方指定（`-1` = 关闭）→ 自动字幕策略。
     ///
-    /// - Important: 「调用方没指定」时**不会**自动选服务器默认字幕。
-    ///   原因是默认字幕可能正好是 PGS，会自动把一次本来能直连的播放变成转码；
-    ///   字幕开关属于 UI 层的明确选择。
+    /// - Important: 「调用方没指定」时按 ``PlaybackPreferences/subtitleMode`` 决定是否自动选轨。
     ///
     /// - Parameters:
     ///   - source: 媒体源。
     ///   - requested: 调用方指定的序号。
-    /// - Returns: 命中的流；`nil` 表示关闭字幕。
-    func resolveSubtitleStream(in source: MediaSource, requested: Int?) -> MediaStream? {
+    /// - Returns: 命中的流；`nil` 表示当前自动策略关闭字幕。
+    func resolveSubtitleStream(
+        in source: MediaSource,
+        requested: Int?,
+        audioStream: MediaStream?
+    ) -> MediaStream? {
         let subtitles = source.streams(ofType: .subtitle)
         if let requested {
             guard requested >= 0 else { return nil }
             return subtitles.first { $0.index == requested } ?? MediaStream(index: requested, type: .subtitle)
         }
-        if let language = settings.preferredSubtitleLanguage, !language.isEmpty {
-            return subtitles.first { Self.matches(language: language, stream: $0) }
+
+        let targetLanguage = settings.preferredSubtitleLanguage ?? settings.interfaceLanguage
+        let languageMatch = targetLanguage.flatMap { language in
+            subtitles.first { Self.matches(language: language, stream: $0) }
         }
-        return nil
+        let forcedMatch = subtitles.first(where: \.isForced)
+
+        switch settings.subtitleMode {
+        case .never:
+            return nil
+        case .always:
+            return languageMatch ?? subtitles.first(where: \.isDefault) ?? subtitles.first
+        case .forced:
+            if let language = targetLanguage,
+               let match = subtitles.first(where: { $0.isForced && Self.matches(language: language, stream: $0) }) {
+                return match
+            }
+            return forcedMatch
+        case .foreign:
+            if let forcedMatch { return forcedMatch }
+            guard let targetLanguage else { return nil }
+            guard let audioStream else {
+                return settings.preferredSubtitleLanguage == nil ? nil : languageMatch
+            }
+            guard !Self.matches(language: targetLanguage, stream: audioStream) else { return nil }
+            return languageMatch ?? source.defaultSubtitleStream
+        }
     }
 
     /// 语言匹配（大小写不敏感，支持 `zh` / `chi` / `zho` 这类三字母代码的前缀匹配）。
@@ -228,11 +307,27 @@ extension PlaybackNegotiator {
     ///   - stream: 媒体流。
     /// - Returns: 是否匹配。
     static func matches(language: String, stream: MediaStream) -> Bool {
-        let wanted = language.lowercased()
+        let wanted = canonicalLanguage(language)
         let candidates = [stream.language, stream.displayLanguage]
             .compactMap { $0?.lowercased() }
             .filter { !$0.isEmpty }
-        return candidates.contains { $0 == wanted || $0.hasPrefix(wanted) || wanted.hasPrefix($0) }
+        return candidates.map(canonicalLanguage).contains { $0 == wanted || $0.hasPrefix(wanted) || wanted.hasPrefix($0) }
+    }
+
+    private static func canonicalLanguage(_ language: String) -> String {
+        let lowercased = language.lowercased()
+        switch lowercased {
+        case "zh", "zho": return "chi"
+        case "en": return "eng"
+        case "ja": return "jpn"
+        case "ko": return "kor"
+        default:
+            if lowercased.hasPrefix("zh-") { return "chi" }
+            if lowercased.hasPrefix("en-") { return "eng" }
+            if lowercased.hasPrefix("ja-") { return "jpn" }
+            if lowercased.hasPrefix("ko-") { return "kor" }
+            return lowercased
+        }
     }
 }
 
